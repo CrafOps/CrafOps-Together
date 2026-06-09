@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "crafops_together",
+  "version": "${version}",
+
+  "name": "CrafOps: Together",
+  "description": "Add immersive physical interactions between players, from holding hands to moving together.",
+  "authors": [],
+  "contact": {},
+
+  "license": "All-Rights-Reserved",
+  "icon": "assets/crafops_together/icon.png",
+
+  "environment": "*",
+  "entrypoints": {
+    "client": ["net.ppekkungz.crafops.client.CrafOpsUtilsClient"],
+    "main": ["net.ppekkungz.crafops.CrafOpsUtils"]
+  },
+
+  "mixins": [
+    "crafops_together.mixins.json"
+    ,{
+      "config": "crafops_together.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
