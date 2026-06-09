@@ -96,25 +96,20 @@ public class HandConnectionRenderer {
         matrices.push();
 
         for (UUID[] pair : pairs) {
-            UUID uuidA = pair[0];
-            UUID uuidB = pair[1];
+            UUID uuidA = pair[0]; // initiator = LEADER
+            UUID uuidB = pair[1]; // target    = FOLLOWER
 
-            // Resolve both players from the client world entity list
             AbstractClientPlayerEntity playerA = findPlayer(client, uuidA);
             AbstractClientPlayerEntity playerB = findPlayer(client, uuidB);
 
-            // Skip if either player isn't loaded on client
             if (playerA == null || playerB == null) continue;
-
-            // Skip rendering the line if either player is invisible to us
-            // (e.g. spectator, or out of render distance)
             if (!playerA.isAlive() || !playerB.isAlive()) continue;
 
-            // Calculate hand positions (camera-relative)
+            // uuidA = initiator → LEADER  (arm swept back)
+            // uuidB = target    → FOLLOWER (arm reaches forward)
             Vec3d posA = getHandPosition(playerA, context.tickDelta(), camPos, true);
             Vec3d posB = getHandPosition(playerB, context.tickDelta(), camPos, false);
 
-            // Draw the connection line
             drawLine(buffer, matrices, posA, posB);
         }
 
@@ -129,42 +124,42 @@ public class HandConnectionRenderer {
     // ── Geometry ──────────────────────────────────────────────────────────────
 
     /**
-     * Calculate the approximate hand position for a player entity,
-     * offset from camera origin to avoid floating-point precision loss.
+     * Get hand position matching the directional arm pose.
      *
-     * @param player    The player entity
-     * @param tickDelta Partial tick for smooth interpolation
-     * @param camPos    Current camera position (subtracted from world pos)
-     * @param rightHand If true, offset toward player's right arm;
-     *                  if false, offset toward player's left arm
-     * @return Camera-relative hand position as Vec3d
+     * Leader  : arm swept back  → hand position is behind the player
+     * Follower: arm forward+up  → hand position is in front of the player
      */
     private static Vec3d getHandPosition(AbstractClientPlayerEntity player,
                                          float tickDelta,
                                          Vec3d camPos,
-                                         boolean rightHand) {
-        // Interpolate entity position between ticks for smooth rendering
-        double x = lerp(player.prevX, player.getX(), tickDelta);
-        double y = lerp(player.prevY, player.getY(), tickDelta) + HAND_HEIGHT_OFFSET;
-        double z = lerp(player.prevZ, player.getZ(), tickDelta);
+                                         boolean isLeader) {
+        double baseX = lerp(player.prevX, player.getX(), tickDelta);
+        double baseY = lerp(player.prevY, player.getY(), tickDelta);
+        double baseZ = lerp(player.prevZ, player.getZ(), tickDelta);
 
-        // Calculate arm side offset perpendicular to player's facing direction
-        // bodyYaw is the horizontal rotation of the player's body
-        float bodyYaw = (float) Math.toRadians(
+        float bodyYawRad = (float) Math.toRadians(
                 lerpAngle(player.prevBodyYaw, player.bodyYaw, tickDelta)
         );
 
-        // Perpendicular direction to facing (90 degrees rotated)
-        // Right arm: positive offset; Left arm: negative offset
-        double sideSign = rightHand ? 1.0 : -1.0;
-        double offsetX = Math.cos(bodyYaw) * ARM_SIDE_OFFSET * sideSign;
-        double offsetZ = Math.sin(bodyYaw) * ARM_SIDE_OFFSET * sideSign;
+        double fwdX = -Math.sin(bodyYawRad);
+        double fwdZ =  Math.cos(bodyYawRad);
+        double rightX =  Math.cos(bodyYawRad);
+        double rightZ =  Math.sin(bodyYawRad);
 
-        // Return camera-relative position
+        // ── Match hand position to arm pose ───────────────────────────────────────
+        // LEADER  pitch=+0.9 → arm back  → hand behind player
+        // FOLLOWER pitch=-1.2 → arm fwd  → hand in front of player
+        double handFwdOffset  = isLeader ? -0.45 :  0.5;
+        double handSideOffset = isLeader ?  0.2  :  0.2;
+        double handY          = isLeader ?  1.05 :  1.2;
+
+        double handX = baseX + fwdX * handFwdOffset + rightX * handSideOffset;
+        double handZ = baseZ + fwdZ * handFwdOffset + rightZ * handSideOffset;
+
         return new Vec3d(
-                x + offsetX - camPos.x,
-                y - camPos.y,
-                z + offsetZ - camPos.z
+                handX - camPos.x,
+                baseY + handY - camPos.y,
+                handZ - camPos.z
         );
     }
 

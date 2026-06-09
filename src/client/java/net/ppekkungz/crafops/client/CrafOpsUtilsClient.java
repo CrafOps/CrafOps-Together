@@ -1,8 +1,10 @@
 package net.ppekkungz.crafops.client;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.ppekkungz.crafops.client.animation.ArmAnimationState;
 import net.ppekkungz.crafops.client.cache.ClientConnectionCache;
 import net.ppekkungz.crafops.client.network.TogetherClientPackets;
 import net.ppekkungz.crafops.client.renderer.HandConnectionRenderer;
@@ -21,9 +23,19 @@ public class CrafOpsUtilsClient implements ClientModInitializer {
 
         WorldRenderEvents.AFTER_TRANSLUCENT.register(HandConnectionRenderer::render);
 
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
-                ClientConnectionCache.clear()
-        );
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.world == null) return;
+
+            for (var player : client.world.getPlayers()) {
+                boolean connected = ClientConnectionCache.isConnected(player.getUuid());
+                ArmAnimationState.tick(player.getUuid(), connected);
+            }
+        });
+
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            ClientConnectionCache.clear();
+            ArmAnimationState.clear();
+        });
 
         LOGGER.info("[CrafOps: Together] Client systems ready.");
     }

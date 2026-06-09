@@ -32,41 +32,37 @@ public class ClientConnectionCache {
     // ── Write Operations ──────────────────────────────────────────────────────
 
     /**
-     * Register a new connection between two players.
-     * Stores both directions so either participant can query their partner.
+     * Returns true if this UUID is the INITIATOR (leader) of their connection.
+     * Initiators are stored in index [0] of each pair.
      *
-     * Safe to call even if a previous connection existed —
-     * it will simply overwrite with the new partner.
-     *
-     * @param initiatorUuid UUID of the player who initiated the hand-hold
-     * @param targetUuid    UUID of the player being held
+     * Implementation: initiator maps TO target, but NOT the reverse.
+     * We track this with a separate initiator set.
      */
+    private static final Set<UUID> initiatorSet = new HashSet<>();
+
     public static void addConnection(UUID initiatorUuid, UUID targetUuid) {
         connectionMap.put(initiatorUuid, targetUuid);
         connectionMap.put(targetUuid, initiatorUuid);
+        initiatorSet.add(initiatorUuid); // ← track who initiated
     }
 
-    /**
-     * Remove the connection involving the given player.
-     * Also removes the symmetric reverse entry automatically.
-     *
-     * Safe to call even if the player has no active connection.
-     *
-     * @param playerUuid UUID of either participant in the connection
-     */
     public static void removeConnection(UUID playerUuid) {
         UUID partnerUuid = connectionMap.remove(playerUuid);
         if (partnerUuid != null) {
             connectionMap.remove(partnerUuid);
+            initiatorSet.remove(playerUuid);
+            initiatorSet.remove(partnerUuid);
         }
     }
 
-    /**
-     * Clear the entire cache.
-     * Called when the client disconnects from a world/server.
-     */
     public static void clear() {
         connectionMap.clear();
+        initiatorSet.clear(); // ← clear this too
+    }
+
+    /** Returns true if this player is the INITIATOR (leader) of their connection. */
+    public static boolean isInitiator(UUID uuid) {
+        return initiatorSet.contains(uuid);
     }
 
     // ── Read Operations ───────────────────────────────────────────────────────

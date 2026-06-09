@@ -30,6 +30,8 @@ import java.util.*;
 public class InteractionManager {
 
     // ── Singleton ─────────────────────────────────────────────────────────────
+    /** Track last tick that rotation sync was sent, per target UUID. */
+    private final Map<UUID, Long> lastRotationSyncTick = new HashMap<>();
 
     private static final InteractionManager INSTANCE = new InteractionManager();
 
@@ -147,6 +149,7 @@ public class InteractionManager {
         component.deactivate();
         initiatorMap.remove(component.getInitiatorUuid());
         targetMap.remove(component.getTargetUuid());
+        lastRotationSyncTick.remove(component.getTargetUuid());
     }
 
     // ── Query ─────────────────────────────────────────────────────────────────
@@ -190,8 +193,6 @@ public class InteractionManager {
      *  5. Apply velocity pull if needed
      */
     public void onServerTick(net.minecraft.server.MinecraftServer server) {
-
-        // Only run every N ticks as configured
         long currentTick = server.getOverworld().getTime();
         if (currentTick % TogetherConfig.pullTickInterval != 0) return;
 
@@ -206,13 +207,11 @@ public class InteractionManager {
             ServerPlayerEntity target = server.getPlayerManager()
                     .getPlayer(component.getTargetUuid());
 
-            // If either player logged off, disconnect
             if (initiator == null || target == null) {
                 pendingRemovals.add(component);
                 continue;
             }
 
-            // If they changed dimensions, disconnect
             if (!initiator.getWorld().equals(target.getWorld())) {
                 pendingRemovals.add(component);
                 TogetherPackets.sendDisconnectPacket(initiator);
@@ -220,95 +219,83 @@ public class InteractionManager {
                 continue;
             }
 
-            double distance = initiator.getPos().distanceTo(target.getPos());
-
-            // Auto-disconnect beyond max range
-            if (distance > TogetherConfig.maxConnectionDistance) {
-                pendingRemovals.add(component);
-                TogetherPackets.sendDisconnectPacket(initiator);
-                TogetherPackets.sendDisconnectPacket(target);
-                continue;
-            }
-
-            // Apply velocity-based pull to the target
-            applyPull(initiator, target, distance);
+            // ── No max distance check — follower is always locked to leader ───
+            applyPull(initiator, target, 0);
         }
 
-        // Process removals after iteration to avoid ConcurrentModificationException
-        for (HandHoldComponent c : pendingRemovals) {
-            removeComponent(c);
-        }
+        for (HandHoldComponent c : pendingRemovals) removeComponent(c);
         pendingRemovals.clear();
     }
 
     // ── Velocity Pull System ──────────────────────────────────────────────────
 
     /**
-     * Applies smooth velocity to the target player to pull them toward
-     * the initiator when they are outside the comfort range.
+     * Lock follower position relative to initiator.
      *
-     * Pull zones:
-     *   0 – comfortRange      : no pull
-     *   comfortRange – strong  : soft pull (linear scale)
-     *   strong – max           : strong pull (accelerated scale)
+     * Instead of velocity pull, we directly set the follower's position
+     * to a fixed offset behind the initiator every tick.
      *
-     * Key design decisions:
-     *  - Uses addVelocity() NOT teleport — no rubber-banding
-     *  - Velocity is capped at maxPullVelocity to prevent snapping
-     *  - Y-axis pull is dampened to avoid launching the player upward
-     *  - Pull direction is normalized so diagonal movement is smooth
-     *  - Preserves existing horizontal velocity partially (blending)
+     * Offset: 0.8 blocks behind initiator, same height.
+     * This keeps hands touching at all times.
      */
     private void applyPull(ServerPlayerEntity initiator,
                            ServerPlayerEntity target,
                            double distance) {
 
-        // No pull within comfort range
-        if (distance <= TogetherConfig.comfortRange) return;
+        // ── Leader's facing direction ─────────────────────────────────────────
+        // Minecraft yaw: 0 = south (+Z), 90 = west (-X), 180 = north (-Z), -90 = east (+X)
+        // Convert to radians for trig
+        float yawDeg = initiator.getYaw();
+        float yawRad = (float) Math.toRadians(yawDeg);
 
-        // Direction vector from target → initiator
-        Vec3d targetPos    = target.getPos();
-        Vec3d initiatorPos = initiator.getPos();
-        Vec3d direction    = initiatorPos.subtract(targetPos).normalize();
+        // Forward vector of leader (direction they are FACING)
+        // In Minecraft: forward = (-sin(yaw), 0, cos(yaw))
+        double fwdX = -Math.sin(yawRad);
+        double fwdZ =  Math.cos(yawRad);
 
-        // Calculate pull strength based on distance zone
-        double pullStrength;
+        // Follow position = directly BEHIND leader by followDist blocks
+        double followDist = 0.8;
+        double targetX = initiator.getX() - fwdX * followDist;
+        double targetY = initiator.getY();
+        double targetZ = initiator.getZ() - fwdZ * followDist;
 
-        if (distance <= TogetherConfig.strongPullDistance) {
-            // Soft pull zone: linearly interpolate between 0 and softPullStrength
-            double t = (distance - TogetherConfig.comfortRange)
-                    / (TogetherConfig.strongPullDistance - TogetherConfig.comfortRange);
-            pullStrength = t * TogetherConfig.softPullStrength;
+        // ── Snap follower position toward target ──────────────────────────────
+        double dx = targetX - target.getX();
+        double dz = targetZ - target.getZ();
+        double horizDist = Math.sqrt(dx * dx + dz * dz);
 
+        if (horizDist > 0.02) {
+            double snapSpeed = 0.6;
+            target.setVelocity(
+                    dx * snapSpeed,
+                    target.getVelocity().y,
+                    dz * snapSpeed
+            );
+            target.velocityModified = true;
         } else {
-            // Strong pull zone: scale up beyond softPullStrength
-            double t = (distance - TogetherConfig.strongPullDistance)
-                    / (TogetherConfig.maxConnectionDistance - TogetherConfig.strongPullDistance);
-            // Clamp t to [0, 1]
-            t = Math.min(t, 1.0);
-            pullStrength = TogetherConfig.softPullStrength
-                    + t * (TogetherConfig.strongPullStrength - TogetherConfig.softPullStrength);
+            // Close enough — zero out horizontal velocity to prevent jitter
+            target.setVelocity(0, target.getVelocity().y, 0);
+            target.velocityModified = true;
         }
 
-        // Cap total pull velocity
-        pullStrength = Math.min(pullStrength, TogetherConfig.maxPullVelocity);
+// ── Force follower to face same direction as leader ───────────────────
+        target.setYaw(yawDeg);
+        target.setHeadYaw(yawDeg);
+        target.bodyYaw = yawDeg;
+        target.prevYaw = yawDeg;
+        target.prevBodyYaw = yawDeg;
 
-        // Build velocity delta
-        double vx = direction.x * pullStrength;
-        double vy = direction.y * pullStrength * 0.4; // dampen vertical
-        double vz = direction.z * pullStrength;
+// ── Throttle requestTeleport — ส่งทุก 2 tick เพื่อป้องกัน กระตุก ────────
+        long now = initiator.getServerWorld().getTime();
+        long lastSync = lastRotationSyncTick.getOrDefault(target.getUuid(), 0L);
 
-        // Blend with existing velocity to avoid sudden direction changes
-        Vec3d currentVel = target.getVelocity();
-        double blendFactor = 0.6; // 60% pull, 40% existing momentum
-
-        double finalVx = currentVel.x * (1.0 - blendFactor) + vx * blendFactor;
-        double finalVy = currentVel.y; // let vanilla handle Y (gravity, jumping)
-        double finalVz = currentVel.z * (1.0 - blendFactor) + vz * blendFactor;
-
-        // Apply and sync to client
-        target.setVelocity(finalVx, finalVy, finalVz);
-        target.velocityModified = true; // tells the server to sync velocity packet
+        if (now - lastSync >= 2) {
+            lastRotationSyncTick.put(target.getUuid(), now);
+            target.networkHandler.requestTeleport(
+                    target.getX(), target.getY(), target.getZ(),
+                    yawDeg, target.getPitch()
+            );
+        }
     }
 
     // ── Sound Effects ─────────────────────────────────────────────────────────
@@ -384,4 +371,12 @@ public class InteractionManager {
     // เพิ่ม import logger ที่ด้านบน class
     private static final org.slf4j.Logger LOGGER =
             org.slf4j.LoggerFactory.getLogger("InteractionManager");
+
+    /**
+     * Returns true if this UUID is the INITIATOR of their connection.
+     * Initiator = leader = the one who right-clicked first.
+     */
+    public boolean isInitiator(UUID uuid) {
+        return initiatorMap.containsKey(uuid);
+    }
 }
