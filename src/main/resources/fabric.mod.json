@@ -5,11 +5,10 @@
 
   "name": "CrafOps: Together",
   "description": "Add immersive physical interactions between players, from holding hands to moving together.",
-  "authors": [],
+  "authors": ["ppekkungz"],
   "contact": {},
 
-  "license": "All-Rights-Reserved",
-  "icon": "assets/crafops_together/icon.png",
+  "license": "LicenseRef-All-Rights-Reserved",
 
   "environment": "*",
   "entrypoints": {
@@ -18,8 +17,8 @@
   },
 
   "mixins": [
-    "crafops_together.mixins.json"
-    ,{
+    "crafops_together.mixins.json",
+    {
       "config": "crafops_together.client.mixins.json",
       "environment": "client"
     }

@@ -3,6 +3,8 @@ package net.ppekkungz.crafops;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.ppekkungz.crafops.config.TogetherConfig;
 import net.ppekkungz.crafops.interaction.InteractionManager;
 import net.ppekkungz.crafops.network.TogetherPackets;
 import org.slf4j.Logger;
@@ -27,6 +29,7 @@ public class CrafOpsUtils implements ModInitializer {
     public void onInitialize() {
         LOGGER.info("[CrafOps: Together] Initializing server systems...");
 
+        TogetherConfig.load();
         TogetherPackets.registerServerReceivers();
 
         ServerTickEvents.END_SERVER_TICK.register(server ->
@@ -34,6 +37,11 @@ public class CrafOpsUtils implements ModInitializer {
         );
 
         TogetherCommands.register();
+
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+                server.execute(() -> TogetherPackets.sendSnapshot(handler.player)));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+                InteractionManager.getInstance().handlePlayerLeaving(handler.player));
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             LOGGER.info("[CrafOps: Together] Server stopping — clearing all connections.");

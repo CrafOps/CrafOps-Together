@@ -6,37 +6,33 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.ppekkungz.crafops.client.animation.ArmAnimationState;
 import net.ppekkungz.crafops.client.cache.ClientConnectionCache;
+import net.ppekkungz.crafops.client.gui.HandHoldRequestQueue;
+import net.ppekkungz.crafops.client.movement.ClientFormationController;
 import net.ppekkungz.crafops.client.network.TogetherClientPackets;
 import net.ppekkungz.crafops.client.renderer.HandConnectionRenderer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-public class CrafOpsUtilsClient implements ClientModInitializer {
-
-    public static final Logger LOGGER = LoggerFactory.getLogger("crafops_together_client");
-
-    @Override
-    public void onInitializeClient() {
-        LOGGER.info("[CrafOps: Together] Initializing client systems...");
-
+public final class CrafOpsUtilsClient implements ClientModInitializer {
+    @Override public void onInitializeClient() {
         TogetherClientPackets.registerClientReceivers();
-
         WorldRenderEvents.AFTER_TRANSLUCENT.register(HandConnectionRenderer::render);
-
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            HandHoldRequestQueue.tick(client);
             if (client.world == null) return;
-
-            for (var player : client.world.getPlayers()) {
-                boolean connected = ClientConnectionCache.isConnected(player.getUuid());
-                ArmAnimationState.tick(player.getUuid(), connected);
+            // Body-only alignment keeps the two arm models parallel while leaving each player's camera/head free.
+            for (var link : ClientConnectionCache.getLinks()) {
+                var leader = client.world.getPlayerByUuid(link.leader());
+                var follower = client.world.getPlayerByUuid(link.follower());
+                if (leader != null && follower != null) {
+                    follower.prevBodyYaw = leader.prevBodyYaw;
+                    follower.bodyYaw = leader.bodyYaw;
+                }
             }
+            ClientFormationController.tick(client);
+            for (var player : client.world.getPlayers()) ArmAnimationState.tick(player.getUuid(),
+                    ClientConnectionCache.hasIncoming(player.getUuid()), ClientConnectionCache.hasOutgoing(player.getUuid()));
         });
-
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            ClientConnectionCache.clear();
-            ArmAnimationState.clear();
+            ClientConnectionCache.clear(); ArmAnimationState.clear(); HandHoldRequestQueue.clear();
         });
-
-        LOGGER.info("[CrafOps: Together] Client systems ready.");
     }
 }

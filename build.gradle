@@ -38,6 +38,12 @@ dependencies {
     modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:${project.devauth_version}")
 
     modRuntimeOnly("maven.modrinth:carpet:K0Wj117C")
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
 }
 
 processResources {
@@ -77,7 +83,7 @@ java {
 }
 
 jar {
-    from("LICENSE") {
+    from("LICENSE.txt") {
         rename { "${it}_${project.archives_base_name}"}
     }
 }

@@ -2,128 +2,57 @@ package net.ppekkungz.crafops.client.cache;
 
 import java.util.*;
 
-/**
- * ClientConnectionCache — Client-side mirror of all active hand-hold connections.
- *
- * The server is the single source of truth.
- * This cache is populated exclusively from incoming S2C packets
- * and is read every frame by HandConnectionRenderer.
- *
- * Thread safety:
- *   All writes must be dispatched via client.execute() (main thread).
- *   Reads happen on the render thread — in Minecraft 1.20.1 the render
- *   thread and client tick thread share the same main thread, so this is safe.
- *
- * Storage structure:
- *   Symmetric map — both directions stored per connection.
- *   Example: Player A holds Player B's hand →
- *     connectionMap: { A→B, B→A }
- *
- *   This lets the renderer look up a partner from either UUID in O(1).
- */
-public class ClientConnectionCache {
+/** Complete client mirror, replaced atomically whenever the server sends a snapshot. */
+public final class ClientConnectionCache {
+    public record Link(UUID id, UUID leader, UUID follower) {}
+    private static Map<UUID, Link> links = Map.of();
+    private static boolean visualsEnabled = true;
+    private static double renderDistance = 64.0;
+    private static double formationSideOffset = .92;
+    private static double formationBehindOffset = 0;
+    private static double formationTolerance = .03;
+    private static double formationSpringStrength = .48;
+    private static double formationAcceleration = .24;
+    private static double formationMaxCorrectionSpeed = 1.0;
+    private static double leaderVelocityMatch = .95;
+    private static double stepAssistVelocity = .18;
 
-    /**
-     * Maps each connected player UUID → their partner's UUID.
-     * Always stored symmetrically (both directions).
-     */
-    private static final Map<UUID, UUID> connectionMap = new HashMap<>();
-
-    // ── Write Operations ──────────────────────────────────────────────────────
-
-    /**
-     * Returns true if this UUID is the INITIATOR (leader) of their connection.
-     * Initiators are stored in index [0] of each pair.
-     *
-     * Implementation: initiator maps TO target, but NOT the reverse.
-     * We track this with a separate initiator set.
-     */
-    private static final Set<UUID> initiatorSet = new HashSet<>();
-
-    public static void addConnection(UUID initiatorUuid, UUID targetUuid) {
-        connectionMap.put(initiatorUuid, targetUuid);
-        connectionMap.put(targetUuid, initiatorUuid);
-        initiatorSet.add(initiatorUuid); // ← track who initiated
+    public static void replace(Collection<Link> snapshot) {
+        Map<UUID, Link> next = new LinkedHashMap<>();
+        for (Link link : snapshot) next.put(link.id(), link);
+        links = Collections.unmodifiableMap(next);
     }
-
-    public static void removeConnection(UUID playerUuid) {
-        UUID partnerUuid = connectionMap.remove(playerUuid);
-        if (partnerUuid != null) {
-            connectionMap.remove(partnerUuid);
-            initiatorSet.remove(playerUuid);
-            initiatorSet.remove(partnerUuid);
-        }
+    public static Collection<Link> getLinks() { return links.values(); }
+    public static boolean isConnected(UUID player) { return hasIncoming(player) || hasOutgoing(player); }
+    public static boolean isAdjacent(UUID first, UUID second) { return links.values().stream().anyMatch(l ->
+            (l.leader().equals(first) && l.follower().equals(second)) || (l.leader().equals(second) && l.follower().equals(first))); }
+    public static boolean hasIncoming(UUID player) { return links.values().stream().anyMatch(l -> l.follower().equals(player)); }
+    public static boolean hasOutgoing(UUID player) { return links.values().stream().anyMatch(l -> l.leader().equals(player)); }
+    public static UUID incomingLeader(UUID player) {
+        for (Link link : links.values()) if (link.follower().equals(player)) return link.leader();
+        return null;
     }
-
-    public static void clear() {
-        connectionMap.clear();
-        initiatorSet.clear(); // ← clear this too
+    public static UUID outgoingFollower(UUID player) {
+        for (Link link : links.values()) if (link.leader().equals(player)) return link.follower();
+        return null;
     }
-
-    /** Returns true if this player is the INITIATOR (leader) of their connection. */
-    public static boolean isInitiator(UUID uuid) {
-        return initiatorSet.contains(uuid);
+    public static void setSettings(boolean enabled, double distance, double side, double behind, double tolerance,
+                                   double spring, double acceleration, double maxSpeed, double velocityMatch, double stepAssist) {
+        visualsEnabled = enabled; renderDistance = distance;
+        formationSideOffset = side; formationBehindOffset = behind; formationTolerance = tolerance;
+        formationSpringStrength = spring; formationAcceleration = acceleration;
+        formationMaxCorrectionSpeed = maxSpeed; leaderVelocityMatch = velocityMatch; stepAssistVelocity = stepAssist;
     }
-
-    // ── Read Operations ───────────────────────────────────────────────────────
-
-    /**
-     * Returns true if this player is currently in an active connection.
-     *
-     * @param uuid UUID to check
-     */
-    public static boolean isConnected(UUID uuid) {
-        return connectionMap.containsKey(uuid);
-    }
-
-    /**
-     * Returns the UUID of the given player's hand-hold partner.
-     * Returns null if the player has no active connection.
-     *
-     * @param uuid UUID of one participant
-     */
-    public static UUID getPartnerUuid(UUID uuid) {
-        return connectionMap.get(uuid);
-    }
-
-    /**
-     * Returns all unique connection pairs as a list of UUID arrays.
-     * Each pair is represented as [initiatorUuid, targetUuid].
-     * Each unique connection appears exactly ONCE (not twice).
-     *
-     * Used by HandConnectionRenderer to iterate and draw lines
-     * without rendering the same connection twice.
-     *
-     * @return list of [UUID, UUID] pairs
-     */
-    public static List<UUID[]> getAllConnectionPairs() {
-        Set<UUID> seen = new HashSet<>();
-        List<UUID[]> pairs = new ArrayList<>();
-
-        for (Map.Entry<UUID, UUID> entry : connectionMap.entrySet()) {
-            UUID a = entry.getKey();
-            UUID b = entry.getValue();
-
-            // Skip if either UUID was already included in a previous pair
-            if (seen.contains(a) || seen.contains(b)) continue;
-
-            pairs.add(new UUID[]{a, b});
-            seen.add(a);
-            seen.add(b);
-        }
-
-        return pairs;
-    }
-
-    /**
-     * Returns the total number of unique active connections.
-     * connectionMap.size() / 2 because each pair is stored twice.
-     */
-    public static int getConnectionCount() {
-        return connectionMap.size() / 2;
-    }
-
-    // ── Prevent instantiation ─────────────────────────────────────────────────
-
+    public static boolean visualsEnabled() { return visualsEnabled; }
+    public static double renderDistance() { return renderDistance; }
+    public static double formationSideOffset() { return formationSideOffset; }
+    public static double formationBehindOffset() { return formationBehindOffset; }
+    public static double formationTolerance() { return formationTolerance; }
+    public static double formationSpringStrength() { return formationSpringStrength; }
+    public static double formationAcceleration() { return formationAcceleration; }
+    public static double formationMaxCorrectionSpeed() { return formationMaxCorrectionSpeed; }
+    public static double leaderVelocityMatch() { return leaderVelocityMatch; }
+    public static double stepAssistVelocity() { return stepAssistVelocity; }
+    public static void clear() { links = Map.of(); }
     private ClientConnectionCache() {}
 }
