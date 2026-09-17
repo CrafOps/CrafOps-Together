@@ -21,5 +21,10 @@
   "screen.crafops_together.request.from": "%s อยากจับมือกับคุณ",
   "screen.crafops_together.request.accept": "ยอมรับ",
   "screen.crafops_together.request.decline": "ปฏิเสธ",
-  "screen.crafops_together.request.hint": "ลูกศร / เลื่อนเมาส์ • Enter หรือ F เพื่อยืนยัน"
+  "screen.crafops_together.request.hint": "ลูกศร / เลื่อนเมาส์ • Enter หรือ F เพื่อยืนยัน",
+  "hud.crafops_together.request": "%s ขอจับมือกับคุณ",
+  "hud.crafops_together.request.keys": "%s รับ  •  %s ปฏิเสธ",
+  "key.categories.crafops_together": "CrafOps: Together",
+  "key.crafops_together.accept_request": "รับคำขอจับมือ",
+  "key.crafops_together.decline_request": "ปฏิเสธคำขอจับมือ"
 }

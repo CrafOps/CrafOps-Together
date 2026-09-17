@@ -5,6 +5,7 @@ import net.minecraft.client.render.entity.model.BipedEntityModel;
 import net.minecraft.entity.LivingEntity;
 import net.ppekkungz.crafops.client.animation.ArmAnimationState;
 import net.ppekkungz.crafops.client.cache.ClientConnectionCache;
+import net.ppekkungz.crafops.interaction.HeadPoseGeometry;
 import net.ppekkungz.crafops.interaction.HandPoseGeometry;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.*;
@@ -20,6 +21,12 @@ public abstract class BipedEntityModelMixin<T extends LivingEntity> {
         float left = ArmAnimationState.left(player.getUuid()), right = ArmAnimationState.right(player.getUuid());
         ClientConnectionCache.Link incoming = ClientConnectionCache.incomingLink(player.getUuid());
         ClientConnectionCache.Link outgoing = ClientConnectionCache.outgoingLink(player.getUuid());
+
+        if (incoming != null) {
+            float safeHeadYaw = HeadPoseGeometry.clampRelativeYaw(headYaw, 80.0f);
+            model.head.yaw = (float) Math.toRadians(safeHeadYaw);
+        }
+
         HandPoseGeometry.ArmAngles leftPose = HandPoseGeometry.angles(ClientConnectionCache.formationSideOffset(),
                 incoming == null ? ClientConnectionCache.formationBehindOffset() : ClientConnectionCache.effectiveBehindOffset(incoming),
                 ClientConnectionCache.visualHandGap(), false,

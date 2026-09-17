@@ -21,5 +21,10 @@
   "screen.crafops_together.request.from": "%s wants to hold your hand",
   "screen.crafops_together.request.accept": "Accept",
   "screen.crafops_together.request.decline": "Decline",
-  "screen.crafops_together.request.hint": "Arrow keys / scroll • Enter or F to confirm"
+  "screen.crafops_together.request.hint": "Arrow keys / scroll • Enter or F to confirm",
+  "hud.crafops_together.request": "%s wants to hold hands",
+  "hud.crafops_together.request.keys": "%s Accept  •  %s Decline",
+  "key.categories.crafops_together": "CrafOps: Together",
+  "key.crafops_together.accept_request": "Accept hand-hold request",
+  "key.crafops_together.decline_request": "Decline hand-hold request"
 }
