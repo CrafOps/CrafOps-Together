@@ -14,25 +14,24 @@ public final class TogetherConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static volatile TogetherConfig INSTANCE = defaults();
 
-    public int configurationVersion = 2;
+    public int configurationVersion = 5;
     public int maxPlayersPerChain = 2;
     public boolean requireConsent = true;
     public int maxPendingRequests = 5;
     public int requestTimeoutSeconds = 15;
     public int requestCooldownMillis = 1200;
     public double interactionDistance = 4.5;
-    public double comfortDistance = 1.35;
-    public double softPullDistance = 2.0;
-    public double strongPullDistance = 4.0;
     public double disconnectDistance = 8.0;
-    public double softPullStrength = 0.035;
-    public double strongPullStrength = 0.11;
-    public double maxAcceleration = 0.09;
-    public double maxPullVelocity = 0.55;
     public double stepAssistVelocity = 0.18;
-    /** Side-by-side formation. 1.16 blocks makes the vanilla arm tips meet at roll 0.38. */
-    public double formationSideOffset = 0.92;
-    public double formationBehindOffset = 0.05;
+    /** Side-by-side spacing and a small visible gap between the two wrist centres. */
+    public double formationSideOffset = 1.04;
+    public double formationBehindOffset = 0.0;
+    public double movingFormationBehindOffset = 0.28;
+    public double movementDetectionSpeed = 0.025;
+    public double movementBlendSpeed = 0.14;
+    public double visualHandGap = 0.08;
+    public double maxJumpArmLift = 0.55;
+    public double maxVisualPositionCorrection = 2.0;
     public double formationTolerance = 0.04;
     public double formationSpringStrength = 0.42;
     public double formationAcceleration = 0.20;
@@ -55,10 +54,16 @@ public final class TogetherConfig {
                     TogetherConfig parsed = GSON.fromJson(json, TogetherConfig.class);
                     if (parsed != null) {
                         loaded = parsed;
-                        if (!json.has("configurationVersion") || loaded.configurationVersion < 2) {
-                            loaded.configurationVersion = 2;
-                            loaded.formationSideOffset = 0.92;
+                        if (!json.has("configurationVersion") || loaded.configurationVersion < 5) {
+                            loaded.configurationVersion = 5;
+                            loaded.formationSideOffset = 1.04;
                             loaded.formationBehindOffset = 0.0;
+                            loaded.movingFormationBehindOffset = 0.28;
+                            loaded.movementDetectionSpeed = 0.025;
+                            loaded.movementBlendSpeed = 0.14;
+                            loaded.visualHandGap = 0.08;
+                            loaded.maxJumpArmLift = 0.55;
+                            loaded.maxVisualPositionCorrection = 2.0;
                             loaded.formationTolerance = 0.03;
                             loaded.formationSpringStrength = 0.48;
                             loaded.formationAcceleration = 0.24;
@@ -82,27 +87,26 @@ public final class TogetherConfig {
 
     public void validate() {
         maxPlayersPerChain = clamp(maxPlayersPerChain, 2, 64);
-        configurationVersion = 2;
+        configurationVersion = 5;
         maxPendingRequests = clamp(maxPendingRequests, 1, 20);
         requestTimeoutSeconds = clamp(requestTimeoutSeconds, 3, 120);
         requestCooldownMillis = clamp(requestCooldownMillis, 250, 10000);
         interactionDistance = clamp(interactionDistance, 1.0, 12.0);
-        comfortDistance = clamp(comfortDistance, 0.25, 4.0);
-        softPullDistance = clamp(softPullDistance, comfortDistance, 6.0);
-        strongPullDistance = clamp(strongPullDistance, softPullDistance + 0.1, 12.0);
-        disconnectDistance = clamp(disconnectDistance, strongPullDistance + 0.5, 32.0);
-        softPullStrength = clamp(softPullStrength, 0.005, 0.25);
-        strongPullStrength = clamp(strongPullStrength, softPullStrength, 0.5);
-        maxAcceleration = clamp(maxAcceleration, 0.01, 0.3);
-        maxPullVelocity = clamp(maxPullVelocity, 0.1, 1.5);
         stepAssistVelocity = clamp(stepAssistVelocity, 0.0, 0.42);
         formationSideOffset = clamp(formationSideOffset, 0.75, 2.0);
         formationBehindOffset = clamp(formationBehindOffset, -0.75, 0.75);
+        movingFormationBehindOffset = clamp(movingFormationBehindOffset, formationBehindOffset, 1.25);
+        movementDetectionSpeed = clamp(movementDetectionSpeed, 0.005, 0.2);
+        movementBlendSpeed = clamp(movementBlendSpeed, 0.02, 0.5);
+        visualHandGap = clamp(visualHandGap, 0.02, 0.25);
+        maxJumpArmLift = clamp(maxJumpArmLift, 0.0, 0.7);
+        maxVisualPositionCorrection = clamp(maxVisualPositionCorrection, 0.25, 4.0);
         formationTolerance = clamp(formationTolerance, 0.01, 0.35);
         formationSpringStrength = clamp(formationSpringStrength, 0.05, 1.0);
         formationAcceleration = clamp(formationAcceleration, 0.03, 0.5);
         formationMaxCorrectionSpeed = clamp(formationMaxCorrectionSpeed, 0.2, 1.5);
         leaderVelocityMatch = clamp(leaderVelocityMatch, 0.0, 1.0);
+        disconnectDistance = clamp(disconnectDistance, formationSideOffset + 1.0, 32.0);
         visualRenderDistance = clamp(visualRenderDistance, 8.0, 256.0);
     }
 

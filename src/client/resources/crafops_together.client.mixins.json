@@ -5,7 +5,8 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "BipedEntityModelMixin",
-    "ClientEntityCollisionMixin"
+    "ClientEntityCollisionMixin",
+    "PlayerEntityRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1

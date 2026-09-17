@@ -11,7 +11,7 @@ import java.util.*;
 public final class TogetherClientPackets {
     public static void registerClientReceivers() {
         ClientPlayNetworking.registerGlobalReceiver(TogetherPackets.S2C_SNAPSHOT, (client, handler, buf, sender) -> {
-            int count = Math.min(buf.readVarInt(), 63);
+            int count = Math.min(buf.readVarInt(), 4096);
             List<ClientConnectionCache.Link> links = new ArrayList<>(count);
             for (int i = 0; i < count; i++) links.add(new ClientConnectionCache.Link(read(buf), read(buf), read(buf)));
             client.execute(() -> ClientConnectionCache.replace(links));
@@ -21,8 +21,12 @@ public final class TogetherClientPackets {
             double side = buf.readDouble(), behind = buf.readDouble(), tolerance = buf.readDouble();
             double spring = buf.readDouble(), acceleration = buf.readDouble(), maxSpeed = buf.readDouble();
             double velocityMatch = buf.readDouble(), stepAssist = buf.readDouble();
+            double handGap = buf.readDouble(), visualCorrection = buf.readDouble();
+            double movingBehind = buf.readDouble(), movementThreshold = buf.readDouble();
+            double blendSpeed = buf.readDouble(), jumpArmLift = buf.readDouble();
             client.execute(() -> ClientConnectionCache.setSettings(enabled, distance, side, behind, tolerance,
-                    spring, acceleration, maxSpeed, velocityMatch, stepAssist));
+                    spring, acceleration, maxSpeed, velocityMatch, stepAssist, handGap, visualCorrection,
+                    movingBehind, movementThreshold, blendSpeed, jumpArmLift));
         });
         ClientPlayNetworking.registerGlobalReceiver(TogetherPackets.S2C_REQUEST, (client, handler, buf, sender) -> {
             UUID id = read(buf), from = read(buf); String name = buf.readString(64); long expires = buf.readLong();

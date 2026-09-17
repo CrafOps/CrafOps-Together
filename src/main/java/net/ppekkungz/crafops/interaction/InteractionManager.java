@@ -92,7 +92,7 @@ public final class InteractionManager {
     }
 
     private String validateConnection(ServerPlayerEntity sender, ServerPlayerEntity recipient) {
-        if (sender == recipient || !sender.isAlive() || !recipient.isAlive()) return "message.crafops_together.invalid_target";
+        if (sender == recipient || !canHoldHands(sender) || !canHoldHands(recipient)) return "message.crafops_together.invalid_target";
         if (sender.getWorld() != recipient.getWorld()) return "message.crafops_together.player_unavailable";
         if (sender.squaredDistanceTo(recipient) > TogetherConfig.get().interactionDistance * TogetherConfig.get().interactionDistance)
             return "message.crafops_together.too_far";
@@ -154,12 +154,12 @@ public final class InteractionManager {
             for (HandHoldComponent link : chain.links) {
                 ServerPlayerEntity leader = server.getPlayerManager().getPlayer(link.getLeaderUuid());
                 ServerPlayerEntity follower = server.getPlayerManager().getPlayer(link.getFollowerUuid());
-                if (leader == null || follower == null || !leader.isAlive() || !follower.isAlive() || leader.getWorld() != follower.getWorld()) {
+                if (leader == null || follower == null || !canHoldHands(leader) || !canHoldHands(follower) || leader.getWorld() != follower.getWorld()) {
                     broken.add(new UUID[]{link.getLeaderUuid(), link.getFollowerUuid()}); continue;
                 }
                 double distance = leader.getPos().distanceTo(follower.getPos());
                 if (distance > TogetherConfig.get().disconnectDistance) { broken.add(new UUID[]{link.getLeaderUuid(), link.getFollowerUuid()}); continue; }
-                applyHandHoldConstraint(leader, follower);
+                applyHandHoldConstraint(link, leader, follower);
             }
         }
         if (!broken.isEmpty()) {
@@ -168,8 +168,13 @@ public final class InteractionManager {
         }
     }
 
-    private void applyHandHoldConstraint(ServerPlayerEntity leader, ServerPlayerEntity follower) {
+    private void applyHandHoldConstraint(HandHoldComponent link, ServerPlayerEntity leader, ServerPlayerEntity follower) {
         TogetherConfig cfg = TogetherConfig.get();
+        double movedX = leader.getX() - leader.prevX;
+        double movedZ = leader.getZ() - leader.prevZ;
+        boolean moving = movedX * movedX + movedZ * movedZ >= cfg.movementDetectionSpeed * cfg.movementDetectionSpeed;
+        link.updateMovementBlend(moving, cfg.movementBlendSpeed);
+        double behindOffset = lerp(cfg.formationBehindOffset, cfg.movingFormationBehindOffset, link.getMovementBlend());
         float yawRadians = (float) Math.toRadians(leader.bodyYaw);
         double forwardX = -Math.sin(yawRadians);
         double forwardZ = Math.cos(yawRadians);
@@ -177,9 +182,9 @@ public final class InteractionManager {
         double rightZ = -Math.sin(yawRadians);
 
         Vec3d goal = new Vec3d(
-                leader.getX() + rightX * cfg.formationSideOffset - forwardX * cfg.formationBehindOffset,
+                leader.getX() + rightX * cfg.formationSideOffset - forwardX * behindOffset,
                 leader.getY(),
-                leader.getZ() + rightZ * cfg.formationSideOffset - forwardZ * cfg.formationBehindOffset
+                leader.getZ() + rightZ * cfg.formationSideOffset - forwardZ * behindOffset
         );
         Vec3d error = goal.subtract(follower.getPos());
         double horizontalError = Math.sqrt(error.x * error.x + error.z * error.z);
@@ -213,6 +218,7 @@ public final class InteractionManager {
     public void handlePlayerLeaving(ServerPlayerEntity player) {
         requestsByRecipient.remove(player.getUuid());
         requestsByRecipient.values().forEach(q -> q.removeIf(r -> r.sender().equals(player.getUuid())));
+        lastRequestAt.remove(player.getUuid());
         disconnectPlayer(player);
     }
 
@@ -229,6 +235,9 @@ public final class InteractionManager {
     }
 
     private void purgeExpired(Deque<PendingHandHoldRequest> queue, long now) { queue.removeIf(r -> r.expired(now)); }
+    private static boolean canHoldHands(ServerPlayerEntity player) {
+        return player.isAlive() && !player.isSpectator() && !player.isSleeping() && !player.hasVehicle();
+    }
     private void play(ServerPlayerEntity p, net.minecraft.sound.SoundEvent sound, float volume, float pitch) {
         if (TogetherConfig.get().enableSoundEffects) p.getWorld().playSound(null, p.getBlockPos(), sound, SoundCategory.PLAYERS, volume, pitch);
     }
@@ -236,6 +245,7 @@ public final class InteractionManager {
     private void addChain(ChainState chain) { chains.add(chain); for (UUID player : chain.players) chainByPlayer.put(player, chain); }
     private void removeChain(ChainState chain) { if (chain == null) return; chains.remove(chain); for (UUID p : chain.players) chainByPlayer.remove(p, chain); }
     private static double clamp(double v, double min, double max) { return Math.max(min, Math.min(max, v)); }
+    private static double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
     private static final class ChainState {
         final List<UUID> players;

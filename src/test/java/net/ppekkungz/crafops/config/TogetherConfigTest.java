@@ -4,19 +4,20 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TogetherConfigTest {
-    @Test void clampsUnsafeLimitsAndOrdersDistances() {
+    @Test void clampsUnsafeLimitsAndFormationValues() {
         TogetherConfig config = TogetherConfig.get();
         config.maxPlayersPerChain = 999;
         config.maxPendingRequests = 0;
-        config.comfortDistance = 3;
-        config.softPullDistance = 1;
-        config.strongPullDistance = 1;
+        config.formationSideOffset = 99;
+        config.visualHandGap = 0;
         config.disconnectDistance = 1;
         config.validate();
+        assertEquals(5, config.configurationVersion);
         assertEquals(64, config.maxPlayersPerChain);
         assertEquals(1, config.maxPendingRequests);
-        assertTrue(config.softPullDistance >= config.comfortDistance);
-        assertTrue(config.strongPullDistance > config.softPullDistance);
-        assertTrue(config.disconnectDistance > config.strongPullDistance);
+        assertEquals(2.0, config.formationSideOffset);
+        assertEquals(.02, config.visualHandGap);
+        assertTrue(config.movingFormationBehindOffset >= config.formationBehindOffset);
+        assertTrue(config.disconnectDistance > config.formationSideOffset);
     }
 }

@@ -11,6 +11,7 @@ import java.util.*;
 
 /** Versioned, bounded network protocol. Server state is authoritative. */
 public final class TogetherPackets {
+    private static final int MAX_SYNCED_LINKS = 4096;
     public static final Identifier S2C_SNAPSHOT = id("snapshot");
     public static final Identifier S2C_REQUEST = id("incoming_request");
     public static final Identifier S2C_SETTINGS = id("settings");
@@ -36,10 +37,10 @@ public final class TogetherPackets {
     public static void sendSnapshot(ServerPlayerEntity player) {
         PacketByteBuf buf = PacketByteBufs.create();
         Collection<HandHoldComponent> links = InteractionManager.getInstance().getAllComponents();
-        buf.writeVarInt(Math.min(links.size(), 63));
+        buf.writeVarInt(Math.min(links.size(), MAX_SYNCED_LINKS));
         int sent = 0;
         for (HandHoldComponent link : links) {
-            if (sent++ >= 63) break;
+            if (sent++ >= MAX_SYNCED_LINKS) break;
             writeUuid(buf, link.getId()); writeUuid(buf, link.getLeaderUuid()); writeUuid(buf, link.getFollowerUuid());
         }
         send(player, S2C_SNAPSHOT, buf);
@@ -58,6 +59,12 @@ public final class TogetherPackets {
         buf.writeDouble(cfg.formationMaxCorrectionSpeed);
         buf.writeDouble(cfg.leaderVelocityMatch);
         buf.writeDouble(cfg.stepAssistVelocity);
+        buf.writeDouble(cfg.visualHandGap);
+        buf.writeDouble(cfg.maxVisualPositionCorrection);
+        buf.writeDouble(cfg.movingFormationBehindOffset);
+        buf.writeDouble(cfg.movementDetectionSpeed);
+        buf.writeDouble(cfg.movementBlendSpeed);
+        buf.writeDouble(cfg.maxJumpArmLift);
         send(player, S2C_SETTINGS, buf);
     }
 

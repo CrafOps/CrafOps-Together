@@ -18,15 +18,7 @@ public final class CrafOpsUtilsClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             HandHoldRequestQueue.tick(client);
             if (client.world == null) return;
-            // Body-only alignment keeps the two arm models parallel while leaving each player's camera/head free.
-            for (var link : ClientConnectionCache.getLinks()) {
-                var leader = client.world.getPlayerByUuid(link.leader());
-                var follower = client.world.getPlayerByUuid(link.follower());
-                if (leader != null && follower != null) {
-                    follower.prevBodyYaw = leader.prevBodyYaw;
-                    follower.bodyYaw = leader.bodyYaw;
-                }
-            }
+            ClientConnectionCache.tickMotion(client.world);
             ClientFormationController.tick(client);
             for (var player : client.world.getPlayers()) ArmAnimationState.tick(player.getUuid(),
                     ClientConnectionCache.hasIncoming(player.getUuid()), ClientConnectionCache.hasOutgoing(player.getUuid()));

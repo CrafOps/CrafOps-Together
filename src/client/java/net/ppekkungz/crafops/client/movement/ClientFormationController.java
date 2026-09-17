@@ -9,20 +9,21 @@ public final class ClientFormationController {
     public static void tick(MinecraftClient client) {
         if (client.player == null || client.world == null) return;
         var follower = client.player;
-        var leaderId = ClientConnectionCache.incomingLeader(follower.getUuid());
-        if (leaderId == null) return;
-        var leader = client.world.getPlayerByUuid(leaderId);
+        var link = ClientConnectionCache.incomingLink(follower.getUuid());
+        if (link == null) return;
+        var leader = client.world.getPlayerByUuid(link.leader());
         if (leader == null) return;
 
         double yaw = Math.toRadians(leader.bodyYaw);
         double forwardX = -Math.sin(yaw), forwardZ = Math.cos(yaw);
         double rightX = -Math.cos(yaw), rightZ = -Math.sin(yaw);
+        double behind = ClientConnectionCache.effectiveBehindOffset(link);
         Vec3d goal = new Vec3d(
                 leader.getX() + rightX * ClientConnectionCache.formationSideOffset()
-                        - forwardX * ClientConnectionCache.formationBehindOffset(),
+                        - forwardX * behind,
                 leader.getY(),
                 leader.getZ() + rightZ * ClientConnectionCache.formationSideOffset()
-                        - forwardZ * ClientConnectionCache.formationBehindOffset()
+                        - forwardZ * behind
         );
         Vec3d error = goal.subtract(follower.getPos());
         double horizontalError = Math.sqrt(error.x * error.x + error.z * error.z);
