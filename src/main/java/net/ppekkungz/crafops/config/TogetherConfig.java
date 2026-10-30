@@ -4,8 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import net.fabricmc.loader.api.FabricLoader;
-import net.ppekkungz.crafops.CrafOpsUtils;
+import net.neoforged.fml.loading.FMLPaths;
+import net.ppekkungz.crafops.CrafOpsTogether;
 import net.ppekkungz.crafops.interaction.FormationSettings;
 import java.io.*;
 import java.nio.file.*;
@@ -63,7 +63,7 @@ public final class TogetherConfig {
 
     public static synchronized boolean load() {
         TogetherConfig loaded = defaults();
-        Path path = FabricLoader.getInstance().getConfigDir().resolve("crafops_together.json");
+        Path path = FMLPaths.CONFIGDIR.get().resolve("crafops_together.json");
         try {
             Files.createDirectories(path.getParent());
             if (Files.exists(path)) {
@@ -78,7 +78,7 @@ public final class TogetherConfig {
             try (Writer writer = Files.newBufferedWriter(path)) { GSON.toJson(loaded, writer); }
             return true;
         } catch (IOException | RuntimeException error) {
-            CrafOpsUtils.LOGGER.error("Unable to load {}. Safe defaults will be used.", path, error);
+            CrafOpsTogether.LOGGER.error("Unable to load {}. Safe defaults will be used.", path, error);
             INSTANCE = defaults();
             return false;
         }

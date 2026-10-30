@@ -1,133 +1,104 @@
 plugins {
-    id 'fabric-loom' version '1.15-SNAPSHOT'
+    id 'java-library'
     id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.148'
 }
 
 version = project.mod_version
-group = project.maven_group
+group = project.mod_group_id
 
 base {
     archivesName = project.archives_base_name
 }
 
-loom {
-    splitEnvironmentSourceSets()
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
 
     runs {
         // Three local players plus a dedicated server for testing interactions between players.
         // Each client opens at 1280x720 so all three fit on one screen (see scripts/arrange-windows.ps1).
         server {
-            runDir "run-server"
+            server()
+            gameDirectory = project.file('run-neo/server')
+            programArgument '--nogui'
         }
         client {
-            vmArgs "-Ddevauth.enabled=false"
-            programArgs "--username", "Dev", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+            client()
+            gameDirectory = project.file('run-neo/client')
+            programArguments.addAll '--username', 'Dev', '--quickPlayMultiplayer', 'localhost:25565', '--width', '1280', '--height', '720'
         }
         client2 {
             client()
-            vmArgs "-Ddevauth.enabled=false"
-            configName "Minecraft Client 2"
-            runDir "run-client2"
-            programArgs "--username", "Dev2", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+            gameDirectory = project.file('run-neo/client2')
+            programArguments.addAll '--username', 'Dev2', '--quickPlayMultiplayer', 'localhost:25565', '--width', '1280', '--height', '720'
         }
         client3 {
             client()
-            vmArgs "-Ddevauth.enabled=false"
-            configName "Minecraft Client 3"
-            runDir "run-client3"
-            programArgs "--username", "Dev3", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+            gameDirectory = project.file('run-neo/client3')
+            programArguments.addAll '--username', 'Dev3', '--quickPlayMultiplayer', 'localhost:25565', '--width', '1280', '--height', '720'
+        }
+        configureEach {
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            logLevel = org.slf4j.event.Level.INFO
         }
     }
 
     mods {
-        "crafops_together" {
+        "${mod_id}" {
             sourceSet sourceSets.main
-            sourceSet sourceSets.client
         }
     }
 }
 
-
-repositories {
-    maven { url = "https://pkgs.dev.azure.com/djtheredstoner/DevAuth/_packaging/public/maven/v1" }
-    maven {
-        url = "https://api.modrinth.com/maven"
-    }
-}
-
 dependencies {
-    // To change the versions see the gradle.properties file
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:${project.devauth_version}")
-
-    modRuntimeOnly("maven.modrinth:carpet:K0Wj117C")
-    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
-    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    // The game is not on the plain unit-test classpath; TogetherConfig needs the Gson that Minecraft 1.21.1 ships.
+    testImplementation 'com.google.code.gson:gson:2.10.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 test {
     useJUnitPlatform()
 }
 
-processResources {
-    inputs.property "version", project.version
-    inputs.property "minecraft_version", project.minecraft_version
-    inputs.property "loader_version", project.loader_version
-    filteringCharset "UTF-8"
-
-    filesMatching("fabric.mod.json") {
-        expand "version": project.version,
-                "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
-    }
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into 'build/generated/sources/modMetadata'
 }
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
 
-def targetJavaVersion = 17
 tasks.withType(JavaCompile).configureEach {
-    // ensure that the encoding is set to UTF-8, no matter what the system default is
-    // this fixes some edge cases with special characters not displaying correctly
-    // see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
-    // If Javadoc is generated, this must be specified in that task too.
-    it.options.encoding = "UTF-8"
-    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
-        it.options.release.set(targetJavaVersion)
-    }
-}
-
-java {
-    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    if (JavaVersion.current() < javaVersion) {
-        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    }
-    // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-    // if it is present.
-    // If you remove this line, sources will not be generated.
-    withSourcesJar()
+    options.encoding = 'UTF-8'
 }
 
 jar {
-    from("LICENSE.txt") {
-        rename { "${it}_${project.archives_base_name}"}
+    from('LICENSE.txt') {
+        rename { "${it}_${project.archives_base_name}" }
     }
 }
 
-// configure the maven publication
 publishing {
     publications {
-        create("mavenJava", MavenPublication) {
-            artifactId = project.archives_base_name
+        register('mavenJava', MavenPublication) {
             from components.java
         }
-    }
-
-    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-    repositories {
-        // Add repositories to publish to here.
-        // Notice: This block does NOT have the same function as the block in the top level.
-        // The repositories here will be used for publishing your artifact, not for
-        // retrieving dependencies.
     }
 }

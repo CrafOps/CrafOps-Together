@@ -1,6 +1,6 @@
 package net.ppekkungz.crafops.interaction;
 
-import net.minecraft.network.PacketByteBuf;
+import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * One tick of a holding player's own movement, sent by their client and relayed straight to partners.
@@ -23,13 +23,13 @@ public record PartnerState(double x, double y, double z, float velocityX, float 
         return new double[]{x + velocityX * t, y + vy * t, z + velocityZ * t};
     }
 
-    public void write(PacketByteBuf buf) {
+    public void write(FriendlyByteBuf buf) {
         buf.writeDouble(x); buf.writeDouble(y); buf.writeDouble(z);
         buf.writeFloat(velocityX); buf.writeFloat(velocityY); buf.writeFloat(velocityZ);
         buf.writeFloat(bodyYaw); buf.writeByte(flags);
     }
 
-    public static PartnerState read(PacketByteBuf buf) {
+    public static PartnerState read(FriendlyByteBuf buf) {
         return new PartnerState(buf.readDouble(), buf.readDouble(), buf.readDouble(),
                 buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readByte());
     }

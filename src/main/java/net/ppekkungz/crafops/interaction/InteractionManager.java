@@ -1,17 +1,17 @@
 package net.ppekkungz.crafops.interaction;
 
-import net.minecraft.particle.ParticleEffect;
-import net.minecraft.particle.ParticleTypes;
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.sound.SoundCategory;
-import net.minecraft.sound.SoundEvent;
-import net.minecraft.sound.SoundEvents;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.Level;
 import net.ppekkungz.crafops.config.TogetherConfig;
 import net.ppekkungz.crafops.network.TogetherPackets;
 
@@ -50,59 +50,59 @@ public final class InteractionManager {
     }
 
     /** Handles a right-click. The server repeats every security and topology check on acceptance. */
-    public boolean requestConnection(ServerPlayerEntity sender, ServerPlayerEntity recipient) {
+    public boolean requestConnection(ServerPlayer sender, ServerPlayer recipient) {
         String invalid = validateConnection(sender, recipient);
-        if (invalid != null) { sender.sendMessage(Text.translatable(invalid), true); return false; }
+        if (invalid != null) { sender.displayClientMessage(Component.translatable(invalid), true); return false; }
         if (!TogetherConfig.get().requireConsent) return connectNow(sender, recipient);
 
         long now = System.currentTimeMillis();
-        long last = lastRequestAt.getOrDefault(sender.getUuid(), 0L);
+        long last = lastRequestAt.getOrDefault(sender.getUUID(), 0L);
         if (now - last < TogetherConfig.get().requestCooldownMillis) {
-            sender.sendMessage(Text.translatable("message.crafops_together.request_cooldown"), true);
+            sender.displayClientMessage(Component.translatable("message.crafops_together.request_cooldown"), true);
             return false;
         }
-        Deque<PendingHandHoldRequest> queue = requestsByRecipient.computeIfAbsent(recipient.getUuid(), key -> new ArrayDeque<>());
+        Deque<PendingHandHoldRequest> queue = requestsByRecipient.computeIfAbsent(recipient.getUUID(), key -> new ArrayDeque<>());
         purgeExpired(queue, now, null);
-        queue.removeIf(request -> request.sender().equals(sender.getUuid()));
+        queue.removeIf(request -> request.sender().equals(sender.getUUID()));
         while (queue.size() >= TogetherConfig.get().maxPendingRequests) queue.removeFirst();
         long timeout = TogetherConfig.get().requestTimeoutSeconds * 1000L;
-        PendingHandHoldRequest request = new PendingHandHoldRequest(UUID.randomUUID(), sender.getUuid(), recipient.getUuid(), now + timeout);
+        PendingHandHoldRequest request = new PendingHandHoldRequest(UUID.randomUUID(), sender.getUUID(), recipient.getUUID(), now + timeout);
         queue.addLast(request);
-        lastRequestAt.put(sender.getUuid(), now);
+        lastRequestAt.put(sender.getUUID(), now);
 
         if (TogetherPackets.canReceiveRequests(recipient)) {
             TogetherPackets.sendIncomingRequest(recipient, request, sender.getGameProfile().getName(), timeout);
         } else {
-            recipient.sendMessage(Text.translatable("message.crafops_together.request_fallback", sender.getDisplayName())
-                    .formatted(Formatting.LIGHT_PURPLE), false);
+            recipient.displayClientMessage(Component.translatable("message.crafops_together.request_fallback", sender.getDisplayName())
+                    .withStyle(ChatFormatting.LIGHT_PURPLE), false);
         }
-        sender.sendMessage(Text.translatable("message.crafops_together.request_sent", recipient.getDisplayName())
-                .formatted(Formatting.LIGHT_PURPLE), true);
-        play(sender, SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME, 0.35f, 1.4f);
+        sender.displayClientMessage(Component.translatable("message.crafops_together.request_sent", recipient.getDisplayName())
+                .withStyle(ChatFormatting.LIGHT_PURPLE), true);
+        play(sender, SoundEvents.AMETHYST_BLOCK_CHIME, 0.35f, 1.4f);
         return true;
     }
 
-    public boolean respond(ServerPlayerEntity recipient, UUID requestId, boolean accepted) {
-        Deque<PendingHandHoldRequest> queue = requestsByRecipient.get(recipient.getUuid());
+    public boolean respond(ServerPlayer recipient, UUID requestId, boolean accepted) {
+        Deque<PendingHandHoldRequest> queue = requestsByRecipient.get(recipient.getUUID());
         if (queue == null) return false;
         purgeExpired(queue, System.currentTimeMillis(), recipient.getServer());
         PendingHandHoldRequest chosen = null;
         for (PendingHandHoldRequest request : queue) if (request.id().equals(requestId)) { chosen = request; break; }
-        if (chosen == null) { recipient.sendMessage(Text.translatable("message.crafops_together.request_expired"), true); return false; }
+        if (chosen == null) { recipient.displayClientMessage(Component.translatable("message.crafops_together.request_expired"), true); return false; }
         queue.remove(chosen);
-        ServerPlayerEntity sender = recipient.getServer().getPlayerManager().getPlayer(chosen.sender());
+        ServerPlayer sender = recipient.getServer().getPlayerList().getPlayer(chosen.sender());
         if (!accepted) {
-            if (sender != null) sender.sendMessage(Text.translatable("message.crafops_together.request_declined", recipient.getDisplayName()), true);
+            if (sender != null) sender.displayClientMessage(Component.translatable("message.crafops_together.request_declined", recipient.getDisplayName()), true);
             return true;
         }
-        if (sender == null) { recipient.sendMessage(Text.translatable("message.crafops_together.player_unavailable"), true); return false; }
+        if (sender == null) { recipient.displayClientMessage(Component.translatable("message.crafops_together.player_unavailable"), true); return false; }
         String invalid = validateConnection(sender, recipient);
-        if (invalid != null) { recipient.sendMessage(Text.translatable(invalid), true); return false; }
+        if (invalid != null) { recipient.displayClientMessage(Component.translatable(invalid), true); return false; }
         return connectNow(sender, recipient);
     }
 
-    public boolean respondLatest(ServerPlayerEntity recipient, boolean accepted, UUID senderFilter) {
-        Deque<PendingHandHoldRequest> queue = requestsByRecipient.get(recipient.getUuid());
+    public boolean respondLatest(ServerPlayer recipient, boolean accepted, UUID senderFilter) {
+        Deque<PendingHandHoldRequest> queue = requestsByRecipient.get(recipient.getUUID());
         if (queue == null) return false;
         purgeExpired(queue, System.currentTimeMillis(), recipient.getServer());
         Iterator<PendingHandHoldRequest> it = queue.descendingIterator();
@@ -113,45 +113,45 @@ public final class InteractionManager {
         return false;
     }
 
-    private String validateConnection(ServerPlayerEntity sender, ServerPlayerEntity recipient) {
+    private String validateConnection(ServerPlayer sender, ServerPlayer recipient) {
         if (sender == recipient || !canHoldHands(sender) || !canHoldHands(recipient)) return "message.crafops_together.invalid_target";
-        if (sender.getWorld() != recipient.getWorld()) return "message.crafops_together.player_unavailable";
-        if (sender.squaredDistanceTo(recipient) > TogetherConfig.get().interactionDistance * TogetherConfig.get().interactionDistance)
+        if (sender.level() != recipient.level()) return "message.crafops_together.player_unavailable";
+        if (sender.distanceToSqr(recipient) > TogetherConfig.get().interactionDistance * TogetherConfig.get().interactionDistance)
             return "message.crafops_together.too_far";
-        ChainState a = chainByPlayer.get(sender.getUuid()), b = chainByPlayer.get(recipient.getUuid());
+        ChainState a = chainByPlayer.get(sender.getUUID()), b = chainByPlayer.get(recipient.getUUID());
         if (a != null && a == b) return "message.crafops_together.already_same_chain";
-        if (a != null && !a.isEndpoint(sender.getUuid())) return "message.crafops_together.not_endpoint";
-        if (b != null && !b.isEndpoint(recipient.getUuid())) return "message.crafops_together.target_not_endpoint";
+        if (a != null && !a.isEndpoint(sender.getUUID())) return "message.crafops_together.not_endpoint";
+        if (b != null && !b.isEndpoint(recipient.getUUID())) return "message.crafops_together.target_not_endpoint";
         int size = (a == null ? 1 : a.players.size()) + (b == null ? 1 : b.players.size());
         if (size > TogetherConfig.get().maxPlayersPerChain) return "message.crafops_together.chain_full";
         return null;
     }
 
-    private boolean connectNow(ServerPlayerEntity sender, ServerPlayerEntity recipient) {
+    private boolean connectNow(ServerPlayer sender, ServerPlayer recipient) {
         String invalid = validateConnection(sender, recipient);
-        if (invalid != null) { sender.sendMessage(Text.translatable(invalid), true); return false; }
-        ChainState first = chainByPlayer.get(sender.getUuid()), second = chainByPlayer.get(recipient.getUuid());
-        List<UUID> firstPlayers = first == null ? List.of(sender.getUuid()) : first.players;
-        List<UUID> secondPlayers = second == null ? List.of(recipient.getUuid()) : second.players;
-        List<UUID> merged = ChainTopology.merge(firstPlayers, sender.getUuid(), secondPlayers, recipient.getUuid(), TogetherConfig.get().maxPlayersPerChain);
+        if (invalid != null) { sender.displayClientMessage(Component.translatable(invalid), true); return false; }
+        ChainState first = chainByPlayer.get(sender.getUUID()), second = chainByPlayer.get(recipient.getUUID());
+        List<UUID> firstPlayers = first == null ? List.of(sender.getUUID()) : first.players;
+        List<UUID> secondPlayers = second == null ? List.of(recipient.getUUID()) : second.players;
+        List<UUID> merged = ChainTopology.merge(firstPlayers, sender.getUUID(), secondPlayers, recipient.getUUID(), TogetherConfig.get().maxPlayersPerChain);
         removeChain(first); if (second != first) removeChain(second);
-        addChain(new ChainState(merged, sender.getWorld().getTime()));
+        addChain(new ChainState(merged, sender.level().getGameTime()));
 
-        sender.sendMessage(Text.translatable("message.crafops_together.now_holding", recipient.getDisplayName()).formatted(Formatting.LIGHT_PURPLE), true);
-        recipient.sendMessage(Text.translatable("message.crafops_together.now_holding", sender.getDisplayName()).formatted(Formatting.LIGHT_PURPLE), true);
-        Vec3d middle = sender.getPos().add(recipient.getPos()).multiply(0.5).add(0, 1.1, 0);
-        particles(sender.getServerWorld(), ParticleTypes.HEART, middle, 5, 0.35, 0.2);
-        play(sender, SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 0.45f, 1.5f);
+        sender.displayClientMessage(Component.translatable("message.crafops_together.now_holding", recipient.getDisplayName()).withStyle(ChatFormatting.LIGHT_PURPLE), true);
+        recipient.displayClientMessage(Component.translatable("message.crafops_together.now_holding", sender.getDisplayName()).withStyle(ChatFormatting.LIGHT_PURPLE), true);
+        Vec3 middle = sender.position().add(recipient.position()).scale(0.5).add(0, 1.1, 0);
+        particles(sender.serverLevel(), ParticleTypes.HEART, middle, 5, 0.35, 0.2);
+        play(sender, SoundEvents.EXPERIENCE_ORB_PICKUP, 0.45f, 1.5f);
         TogetherPackets.broadcastSnapshot(sender.getServer());
         return true;
     }
 
     /** Debug: links without a request, first placing the follower on the leader's right. Returns an error key or null. */
-    public String debugConnect(ServerPlayerEntity leader, ServerPlayerEntity follower) {
+    public String debugConnect(ServerPlayer leader, ServerPlayer follower) {
         if (leader == follower) return "message.crafops_together.invalid_target";
-        double yaw = Math.toRadians(leader.bodyYaw), side = TogetherConfig.get().formationSideOffset;
-        follower.teleport(leader.getServerWorld(), leader.getX() - Math.cos(yaw) * side, leader.getY(),
-                leader.getZ() - Math.sin(yaw) * side, leader.getYaw(), follower.getPitch());
+        double yaw = Math.toRadians(leader.yBodyRot), side = TogetherConfig.get().formationSideOffset;
+        follower.teleportTo(leader.serverLevel(), leader.getX() - Math.cos(yaw) * side, leader.getY(),
+                leader.getZ() - Math.sin(yaw) * side, leader.getYRot(), follower.getXRot());
         String invalid = validateConnection(leader, follower);
         if (invalid != null) return invalid;
         connectNow(leader, follower);
@@ -170,29 +170,29 @@ public final class InteractionManager {
         return leading;
     }
 
-    public boolean disconnectLink(ServerPlayerEntity actor, UUID other) {
-        ChainState chain = chainByPlayer.get(actor.getUuid());
+    public boolean disconnectLink(ServerPlayer actor, UUID other) {
+        ChainState chain = chainByPlayer.get(actor.getUUID());
         if (chain == null) return false;
-        int a = chain.players.indexOf(actor.getUuid()), b = chain.players.indexOf(other);
+        int a = chain.players.indexOf(actor.getUUID()), b = chain.players.indexOf(other);
         if (Math.abs(a - b) != 1) return false;
         splitAt(chain, Math.min(a, b));
         notifyLetGo(actor, other);
-        play(actor, SoundEvents.BLOCK_WOOL_PLACE, 0.4f, 0.9f);
+        play(actor, SoundEvents.WOOL_PLACE, 0.4f, 0.9f);
         TogetherPackets.broadcastSnapshot(actor.getServer());
         return true;
     }
 
-    public boolean disconnectPlayer(ServerPlayerEntity player) {
-        ChainState chain = chainByPlayer.get(player.getUuid());
+    public boolean disconnectPlayer(ServerPlayer player) {
+        ChainState chain = chainByPlayer.get(player.getUUID());
         if (chain == null) return false;
-        int index = chain.players.indexOf(player.getUuid());
+        int index = chain.players.indexOf(player.getUUID());
         List<UUID> neighbours = new ArrayList<>(2);
         if (index > 0) neighbours.add(chain.players.get(index - 1));
         if (index + 1 < chain.players.size()) neighbours.add(chain.players.get(index + 1));
-        List<List<UUID>> pieces = ChainTopology.removePlayer(chain.players, player.getUuid());
+        List<List<UUID>> pieces = ChainTopology.removePlayer(chain.players, player.getUUID());
         removeChain(chain); addIfConnected(pieces.get(0), chain.createdAtTick); addIfConnected(pieces.get(1), chain.createdAtTick);
         for (UUID neighbour : neighbours) notifyLetGo(player, neighbour);
-        play(player, SoundEvents.BLOCK_WOOL_PLACE, 0.4f, 0.9f);
+        play(player, SoundEvents.WOOL_PLACE, 0.4f, 0.9f);
         TogetherPackets.broadcastSnapshot(player.getServer());
         return true;
     }
@@ -211,13 +211,13 @@ public final class InteractionManager {
             if (!chains.contains(chain)) continue;
             if (regroupAfterTeleport(server, chain)) continue;
             for (HandHoldComponent link : new ArrayList<>(chain.links)) {
-                ServerPlayerEntity leader = server.getPlayerManager().getPlayer(link.getLeaderUuid());
-                ServerPlayerEntity follower = server.getPlayerManager().getPlayer(link.getFollowerUuid());
+                ServerPlayer leader = server.getPlayerList().getPlayer(link.getLeaderUuid());
+                ServerPlayer follower = server.getPlayerList().getPlayer(link.getFollowerUuid());
                 if (leader == null || follower == null || !canHoldHands(leader) || !canHoldHands(follower)
-                        || leader.getWorld() != follower.getWorld()
-                        || leader.getPos().distanceTo(follower.getPos()) > TogetherConfig.get().disconnectDistance) {
+                        || leader.level() != follower.level()
+                        || leader.position().distanceTo(follower.position()) > TogetherConfig.get().disconnectDistance) {
                     removePairWithoutSync(link.getLeaderUuid(), link.getFollowerUuid());
-                    if (leader != null && follower != null) notifyLetGo(leader, follower.getUuid());
+                    if (leader != null && follower != null) notifyLetGo(leader, follower.getUUID());
                     changed = true;
                 }
             }
@@ -233,7 +233,7 @@ public final class InteractionManager {
     private boolean refreshFlying(MinecraftServer server) {
         Set<UUID> now = new HashSet<>();
         for (UUID id : chainByPlayer.keySet()) {
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
+            ServerPlayer player = server.getPlayerList().getPlayer(id);
             if (player != null && player.getAbilities().flying) now.add(id);
         }
         if (now.equals(flying)) return false;
@@ -248,62 +248,62 @@ public final class InteractionManager {
     private boolean regroupAfterTeleport(MinecraftServer server, ChainState chain) {
         TogetherConfig cfg = TogetherConfig.get();
         if (!cfg.teleportTogether) return false;
-        List<ServerPlayerEntity> members = new ArrayList<>(chain.players.size());
+        List<ServerPlayer> members = new ArrayList<>(chain.players.size());
         for (UUID id : chain.players) {
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
+            ServerPlayer player = server.getPlayerList().getPlayer(id);
             if (player == null || !canHoldHands(player)) return false;
             members.add(player);
         }
         if (!isSpread(members, cfg.disconnectDistance)) return false;
 
-        ServerPlayerEntity jumper = null;
-        for (ServerPlayerEntity member : members) {
+        ServerPlayer jumper = null;
+        for (ServerPlayer member : members) {
             if (!jumpedThisTick(member, cfg.teleportDetectDistance)) continue;
             if (jumper != null) return false;
             jumper = member;
         }
         if (jumper == null) return false;
 
-        ServerWorld world = jumper.getServerWorld();
-        double yaw = Math.toRadians(jumper.bodyYaw);
+        ServerLevel world = jumper.serverLevel();
+        double yaw = Math.toRadians(jumper.yBodyRot);
         double rightX = -Math.cos(yaw), rightZ = -Math.sin(yaw);
         int jumperIndex = members.indexOf(jumper);
         for (int i = 0; i < members.size(); i++) {
-            ServerPlayerEntity member = members.get(i);
+            ServerPlayer member = members.get(i);
             if (member == jumper) continue;
             double offset = (i - jumperIndex) * cfg.formationSideOffset;
-            Vec3d target = new Vec3d(jumper.getX() + rightX * offset, jumper.getY(), jumper.getZ() + rightZ * offset);
-            if (!world.isSpaceEmpty(member, member.getBoundingBox().offset(target.subtract(member.getPos())))) target = jumper.getPos();
-            if (cfg.enableParticles) particles(member.getServerWorld(), ParticleTypes.REVERSE_PORTAL, member.getPos().add(0, 1, 0), 24, 0.3, 0.6);
-            member.teleport(world, target.x, target.y, target.z, jumper.getYaw(), member.getPitch());
+            Vec3 target = new Vec3(jumper.getX() + rightX * offset, jumper.getY(), jumper.getZ() + rightZ * offset);
+            if (!world.noCollision(member, member.getBoundingBox().move(target.subtract(member.position())))) target = jumper.position();
+            if (cfg.enableParticles) particles(member.serverLevel(), ParticleTypes.REVERSE_PORTAL, member.position().add(0, 1, 0), 24, 0.3, 0.6);
+            member.teleportTo(world, target.x, target.y, target.z, jumper.getYRot(), member.getXRot());
             member.fallDistance = 0;
-            member.setVelocity(Vec3d.ZERO);
-            member.velocityModified = true;
+            member.setDeltaMovement(Vec3.ZERO);
+            member.hurtMarked = true;
         }
-        particles(world, ParticleTypes.REVERSE_PORTAL, jumper.getPos().add(0, 1, 0), 32, 0.8, 0.6);
-        world.playSound(null, jumper.getBlockPos(), SoundEvents.ENTITY_ENDERMAN_TELEPORT, SoundCategory.PLAYERS, 0.35f, 1.3f);
+        particles(world, ParticleTypes.REVERSE_PORTAL, jumper.position().add(0, 1, 0), 32, 0.8, 0.6);
+        world.playSound(null, jumper.blockPosition(), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 0.35f, 1.3f);
         return true;
     }
 
-    private static boolean isSpread(List<ServerPlayerEntity> members, double distance) {
+    private static boolean isSpread(List<ServerPlayer> members, double distance) {
         for (int i = 0; i + 1 < members.size(); i++) {
-            ServerPlayerEntity a = members.get(i), b = members.get(i + 1);
-            if (a.getWorld() != b.getWorld() || a.getPos().distanceTo(b.getPos()) > distance) return true;
+            ServerPlayer a = members.get(i), b = members.get(i + 1);
+            if (a.level() != b.level() || a.position().distanceTo(b.position()) > distance) return true;
         }
         return false;
     }
 
-    private boolean jumpedThisTick(ServerPlayerEntity player, double threshold) {
-        Anchor anchor = lastAnchor.get(player.getUuid());
+    private boolean jumpedThisTick(ServerPlayer player, double threshold) {
+        Anchor anchor = lastAnchor.get(player.getUUID());
         if (anchor == null) return false;
-        return anchor.world != player.getWorld() || anchor.position.squaredDistanceTo(player.getPos()) > threshold * threshold;
+        return anchor.world != player.level() || anchor.position.distanceToSqr(player.position()) > threshold * threshold;
     }
 
     private void recordAnchors(MinecraftServer server) {
         lastAnchor.keySet().retainAll(chainByPlayer.keySet());
         for (UUID id : chainByPlayer.keySet()) {
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
-            if (player != null) lastAnchor.put(id, new Anchor(player.getWorld(), player.getPos()));
+            ServerPlayer player = server.getPlayerList().getPlayer(id);
+            if (player != null) lastAnchor.put(id, new Anchor(player.level(), player.position()));
         }
     }
 
@@ -314,10 +314,10 @@ public final class InteractionManager {
         if (Math.abs(a - b) == 1) splitAt(chain, Math.min(a, b));
     }
 
-    public void handlePlayerLeaving(ServerPlayerEntity player) {
-        requestsByRecipient.remove(player.getUuid());
-        requestsByRecipient.values().forEach(q -> q.removeIf(r -> r.sender().equals(player.getUuid())));
-        lastRequestAt.remove(player.getUuid());
+    public void handlePlayerLeaving(ServerPlayer player) {
+        requestsByRecipient.remove(player.getUUID());
+        requestsByRecipient.values().forEach(q -> q.removeIf(r -> r.sender().equals(player.getUUID())));
+        lastRequestAt.remove(player.getUUID());
         disconnectPlayer(player);
     }
 
@@ -332,7 +332,7 @@ public final class InteractionManager {
         for (int i = 0; i < chains.size(); i++) {
             List<String> names = new ArrayList<>();
             for (UUID id : chains.get(i).players) {
-                ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
+                ServerPlayer player = server.getPlayerList().getPlayer(id);
                 String name = player == null ? id.toString() : player.getGameProfile().getName();
                 names.add(flying.contains(id) ? name + " (flying)" : name);
             }
@@ -349,34 +349,34 @@ public final class InteractionManager {
             if (!request.expired(now)) continue;
             it.remove();
             if (server == null) continue;
-            ServerPlayerEntity sender = server.getPlayerManager().getPlayer(request.sender());
-            ServerPlayerEntity recipient = server.getPlayerManager().getPlayer(request.recipient());
+            ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
+            ServerPlayer recipient = server.getPlayerList().getPlayer(request.recipient());
             if (sender != null && recipient != null)
-                sender.sendMessage(Text.translatable("message.crafops_together.request_timed_out", recipient.getDisplayName()), true);
+                sender.displayClientMessage(Component.translatable("message.crafops_together.request_timed_out", recipient.getDisplayName()), true);
         }
     }
 
-    private void notifyLetGo(ServerPlayerEntity actor, UUID other) {
-        ServerPlayerEntity partner = actor.getServer().getPlayerManager().getPlayer(other);
+    private void notifyLetGo(ServerPlayer actor, UUID other) {
+        ServerPlayer partner = actor.getServer().getPlayerList().getPlayer(other);
         if (partner == null) return;
-        actor.sendMessage(Text.translatable("message.crafops_together.let_go", partner.getDisplayName()), true);
-        partner.sendMessage(Text.translatable("message.crafops_together.let_go", actor.getDisplayName()), true);
+        actor.displayClientMessage(Component.translatable("message.crafops_together.let_go", partner.getDisplayName()), true);
+        partner.displayClientMessage(Component.translatable("message.crafops_together.let_go", actor.getDisplayName()), true);
     }
 
-    private static boolean canHoldHands(ServerPlayerEntity player) {
-        return player.isAlive() && !player.isSpectator() && !player.isSleeping() && !player.hasVehicle() && !player.isFallFlying();
+    private static boolean canHoldHands(ServerPlayer player) {
+        return player.isAlive() && !player.isSpectator() && !player.isSleeping() && !player.isPassenger() && !player.isFallFlying();
     }
-    private void play(ServerPlayerEntity p, SoundEvent sound, float volume, float pitch) {
-        if (TogetherConfig.get().enableSoundEffects) p.getWorld().playSound(null, p.getBlockPos(), sound, SoundCategory.PLAYERS, volume, pitch);
+    private void play(ServerPlayer p, SoundEvent sound, float volume, float pitch) {
+        if (TogetherConfig.get().enableSoundEffects) p.level().playSound(null, p.blockPosition(), sound, SoundSource.PLAYERS, volume, pitch);
     }
-    private static void particles(ServerWorld world, ParticleEffect type, Vec3d at, int count, double spread, double speed) {
-        if (TogetherConfig.get().enableParticles) world.spawnParticles(type, at.x, at.y, at.z, count, spread, spread * 0.6, spread, speed * 0.1);
+    private static void particles(ServerLevel world, ParticleOptions type, Vec3 at, int count, double spread, double speed) {
+        if (TogetherConfig.get().enableParticles) world.sendParticles(type, at.x, at.y, at.z, count, spread, spread * 0.6, spread, speed * 0.1);
     }
     private void addIfConnected(List<UUID> players, long tick) { if (players.size() >= 2) addChain(new ChainState(players, tick)); }
     private void addChain(ChainState chain) { chains.add(chain); for (UUID player : chain.players) chainByPlayer.put(player, chain); }
     private void removeChain(ChainState chain) { if (chain == null) return; chains.remove(chain); for (UUID p : chain.players) chainByPlayer.remove(p, chain); }
 
-    private record Anchor(World world, Vec3d position) {}
+    private record Anchor(Level world, Vec3 position) {}
 
     private static final class ChainState {
         final List<UUID> players;

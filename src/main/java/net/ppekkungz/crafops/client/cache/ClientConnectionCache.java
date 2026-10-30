@@ -1,11 +1,11 @@
 package net.ppekkungz.crafops.client.cache;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.world.phys.Vec3;
 import net.ppekkungz.crafops.interaction.PartnerState;
-import net.minecraft.client.world.ClientWorld;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.ppekkungz.crafops.interaction.FollowSteering;
 import net.ppekkungz.crafops.interaction.FormationSettings;
 
@@ -28,7 +28,7 @@ public final class ClientConnectionCache {
     private static final Map<UUID, Track> partnerTracks = new HashMap<>();
     private static final Map<UUID, Display> displayed = new HashMap<>();
     private record Track(PartnerState state, long receivedNanos) {}
-    private record Display(Vec3d position, long atNanos) {}
+    private record Display(Vec3 position, long atNanos) {}
 
     private static Map<UUID, Link> links = Map.of();
     private static Map<UUID, Link> incomingByFollower = Map.of();
@@ -77,51 +77,51 @@ public final class ClientConnectionCache {
      * velocity for the time since it arrived plus the one-way trip (half of each side's ping
      * of server wait, minus the tick the follower spends moving). Null when no fresh state exists.
      */
-    public static Vec3d predictedPosition(UUID player) {
+    public static Vec3 predictedPosition(UUID player) {
         Track track = partnerTracks.get(player);
         if (track == null || System.nanoTime() - track.receivedNanos > STALE_NANOS) return null;
         double ageTicks = (System.nanoTime() - track.receivedNanos) / 50_000_000.0;
         double tripTicks = (pingMillis(player) + pingMillis(localPlayerId())) / 2.0 / 50.0 + LATENCY_BIAS_TICKS;
         double[] p = track.state.extrapolate(ageTicks + tripTicks);
-        return new Vec3d(p[0], p[1], p[2]);
+        return new Vec3(p[0], p[1], p[2]);
     }
 
     /**
      * {@link #predictedPosition} smoothed per frame, for drawing: a new packet nudges the model instead of
      * snapping it. Large jumps (teleports) snap straight to the new spot.
      */
-    public static Vec3d displayPosition(UUID player) {
-        Vec3d target = predictedPosition(player);
+    public static Vec3 displayPosition(UUID player) {
+        Vec3 target = predictedPosition(player);
         if (target == null) { displayed.remove(player); return null; }
         long now = System.nanoTime();
         Display shown = displayed.get(player);
-        if (shown == null || shown.position.squaredDistanceTo(target) > SNAP_DISTANCE * SNAP_DISTANCE) {
+        if (shown == null || shown.position.distanceToSqr(target) > SNAP_DISTANCE * SNAP_DISTANCE) {
             displayed.put(player, new Display(target, now));
             return target;
         }
         double seconds = (now - shown.atNanos) / 1.0e9;
         if (seconds <= 0) return shown.position;
         double blend = 1.0 - Math.exp(-seconds * DISPLAY_SMOOTHING_PER_SECOND);
-        Vec3d next = shown.position.lerp(target, blend);
+        Vec3 next = shown.position.lerp(target, blend);
         displayed.put(player, new Display(next, now));
         return next;
     }
 
     /** Leader velocity in blocks/tick: the relayed one when fresh, else estimated from interpolated movement. */
-    public static Vec3d leaderVelocity(Link link) {
+    public static Vec3 leaderVelocity(Link link) {
         PartnerState state = freshState(link.leader());
-        if (state != null) return new Vec3d(state.velocityX(), state.velocityY(), state.velocityZ());
-        return new Vec3d(leaderVelocityX(link), leaderVelocityY(link), leaderVelocityZ(link));
+        if (state != null) return new Vec3(state.velocityX(), state.velocityY(), state.velocityZ());
+        return new Vec3(leaderVelocityX(link), leaderVelocityY(link), leaderVelocityZ(link));
     }
 
     private static int pingMillis(UUID player) {
-        var handler = MinecraftClient.getInstance().getNetworkHandler();
-        PlayerListEntry entry = handler == null || player == null ? null : handler.getPlayerListEntry(player);
+        var handler = Minecraft.getInstance().getConnection();
+        PlayerInfo entry = handler == null || player == null ? null : handler.getPlayerInfo(player);
         return entry == null ? 0 : Math.min(entry.getLatency(), MAX_TRUSTED_PING_MILLIS);
     }
     private static UUID localPlayerId() {
-        var player = MinecraftClient.getInstance().player;
-        return player == null ? null : player.getUuid();
+        var player = Minecraft.getInstance().player;
+        return player == null ? null : player.getUUID();
     }
 
     /** Server-reported flight, since a client cannot see other players' abilities. */
@@ -132,14 +132,14 @@ public final class ClientConnectionCache {
     public static FormationSettings settings() { return settings; }
 
     /** Advances shared visual/motion state once per client tick. */
-    public static void tickMotion(ClientWorld world) {
+    public static void tickMotion(ClientLevel world) {
         for (Link link : links.values()) {
-            if (!(world.getPlayerByUuid(link.leader()) instanceof AbstractClientPlayerEntity leader)
-                    || !(world.getPlayerByUuid(link.follower()) instanceof AbstractClientPlayerEntity follower)) continue;
+            if (!(world.getPlayerByUUID(link.leader()) instanceof AbstractClientPlayer leader)
+                    || !(world.getPlayerByUUID(link.follower()) instanceof AbstractClientPlayer follower)) continue;
             MotionState state = motionByLink.get(link.id());
-            double movedX = leader.getX() - leader.prevX, movedZ = leader.getZ() - leader.prevZ;
+            double movedX = leader.getX() - leader.xo, movedZ = leader.getZ() - leader.zo;
             if (state == null || movedX * movedX + movedZ * movedZ > TELEPORT_RESET_DISTANCE * TELEPORT_RESET_DISTANCE) {
-                state = new MotionState(leader.bodyYaw);
+                state = new MotionState(leader.yBodyRot);
                 motionByLink.put(link.id(), state);
                 continue;
             }
@@ -147,13 +147,13 @@ public final class ClientConnectionCache {
             state.prevYaw = state.yaw;
             // Ease toward the leader's facing: a fixed floor for small corrections, faster for sharp turns.
             PartnerState relayed = freshState(link.leader());
-            float targetYaw = relayed == null ? leader.bodyYaw : relayed.bodyYaw();
+            float targetYaw = relayed == null ? leader.yBodyRot : relayed.bodyYaw();
             float gap = Math.abs(FollowSteering.wrapDegrees(targetYaw - state.yaw));
             state.yaw = FollowSteering.approachAngle(state.yaw, targetYaw, Math.max((float) settings.yawSpeed(), gap * TURN_CATCH_UP));
 
             state.velocityX = state.velocityX * 0.5 + movedX * 0.5;
             state.velocityZ = state.velocityZ * 0.5 + movedZ * 0.5;
-            state.velocityY = state.velocityY * 0.5 + (leader.getY() - leader.prevY) * 0.5;
+            state.velocityY = state.velocityY * 0.5 + (leader.getY() - leader.yo) * 0.5;
             double threshold = settings.movementDetectionSpeed();
             boolean moving = movedX * movedX + movedZ * movedZ >= threshold * threshold;
             state.prevBlend = state.blend;
@@ -196,10 +196,10 @@ public final class ClientConnectionCache {
         partnerTracks.clear(); displayed.clear();
     }
 
-    private static double jumpLift(AbstractClientPlayerEntity jumper, AbstractClientPlayerEntity other) {
-        if (jumper.isTouchingWater()) return 0.0;
-        double verticalVelocity = Math.max(0.0, jumper.getY() - jumper.prevY);
-        boolean airborneJump = !jumper.isOnGround() && (jumper.getY() > other.getY() || verticalVelocity > .04);
+    private static double jumpLift(AbstractClientPlayer jumper, AbstractClientPlayer other) {
+        if (jumper.isInWater()) return 0.0;
+        double verticalVelocity = Math.max(0.0, jumper.getY() - jumper.yo);
+        boolean airborneJump = !jumper.onGround() && (jumper.getY() > other.getY() || verticalVelocity > .04);
         if (!airborneJump) return 0.0;
         return Math.min(settings.maxJumpArmLift(), Math.max(jumper.getY() - other.getY(), verticalVelocity * 1.15));
     }
