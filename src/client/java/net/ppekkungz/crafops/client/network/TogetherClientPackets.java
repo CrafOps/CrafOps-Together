@@ -14,7 +14,13 @@ public final class TogetherClientPackets {
             int count = Math.min(buf.readVarInt(), 4096);
             List<ClientConnectionCache.Link> links = new ArrayList<>(count);
             for (int i = 0; i < count; i++) links.add(new ClientConnectionCache.Link(read(buf), read(buf), read(buf)));
-            client.execute(() -> ClientConnectionCache.replace(links));
+            client.execute(() -> {
+                ClientConnectionCache.replace(links);
+
+                if (client.player != null) {
+                    HandHoldRequestQueue.removeConnected(client.player.getUuid(), links);
+                }
+            });
         });
         ClientPlayNetworking.registerGlobalReceiver(TogetherPackets.S2C_SETTINGS, (client, handler, buf, sender) -> {
             boolean enabled = buf.readBoolean(); double distance = buf.readDouble();
