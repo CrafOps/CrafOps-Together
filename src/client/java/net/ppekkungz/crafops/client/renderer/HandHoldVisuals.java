@@ -1,82 +1,112 @@
 package net.ppekkungz.crafops.client.renderer;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.ppekkungz.crafops.client.animation.ArmAnimationState;
 import net.minecraft.util.math.Vec3d;
 import net.ppekkungz.crafops.client.cache.ClientConnectionCache;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
-/** Canonical render-space formation used identically by every client. */
+/** Canonical render-space formation, resolved from the chain head so every observer sees the same line. */
 public final class HandHoldVisuals {
-    public static final double HAND_HEIGHT = 0.80;
 
     public static Vec3d interpolatedPosition(AbstractClientPlayerEntity player, float delta) {
         return new Vec3d(lerp(player.prevX, player.getX(), delta), lerp(player.prevY, player.getY(), delta),
                 lerp(player.prevZ, player.getZ(), delta));
     }
 
-    public static Vec3d expectedFollowerPosition(AbstractClientPlayerEntity leader, float delta,
-                                                  ClientConnectionCache.Link link) {
-        Vec3d position = canonicalPosition(leader, delta, new HashSet<>());
-        Basis basis = basis(lerpAngle(leader.prevBodyYaw, leader.bodyYaw, delta));
-        double behind = ClientConnectionCache.effectiveBehindOffset(link);
-        return position.add(
-                basis.rightX * ClientConnectionCache.formationSideOffset()
-                        - basis.forwardX * behind,
-                0,
-                basis.rightZ * ClientConnectionCache.formationSideOffset()
-                        - basis.forwardZ * behind);
+    /** Where {@code follower} should be drawn this frame; its own Y is kept so steps and swimming stay honest. */
+    public static Vec3d expectedFollowerPosition(AbstractClientPlayerEntity follower, float delta) {
+        return canonicalPosition(follower, delta, new HashSet<>());
     }
 
-    public static Vec3d leaderHand(AbstractClientPlayerEntity leader, float delta, ClientConnectionCache.Link link) {
-        return contactPoint(leader, delta, link, -ClientConnectionCache.visualHandGap() * .5);
+    /**
+     * Offset the renderer applies so a holding pair is always drawn hand in hand, on every screen:
+     * <ul>
+     *   <li>On the follower's own screen the remote leader is drawn at its formation spot beside the follower.
+     *       Remote players arrive a few ticks late, so without this the follower would look like the one pulling.</li>
+     *   <li>Everywhere else a remote follower is drawn at its formation spot beside its (canonical) leader.</li>
+     * </ul>
+     * Height is locked too while the pair swims or flies. The lock stays at full strength and lets go only past
+     * {@link #RELEASE_DISTANCE} (a teleport), so the hands never drift apart and snap back.
+     */
+    public static Vec3d renderCorrection(AbstractClientPlayerEntity player, float delta) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (player == client.player || player.getWorld() == null) return Vec3d.ZERO;
+        Vec3d actual = interpolatedPosition(player, delta);
+
+        ClientConnectionCache.Link localIncoming = client.player == null ? null : ClientConnectionCache.incomingLink(client.player.getUuid());
+        if (localIncoming != null && localIncoming.leader().equals(player.getUuid())) {
+            Vec3d follower = interpolatedPosition(client.player, delta);
+            Vec3d offset = formationOffset(localIncoming, player, delta);
+            Vec3d target = new Vec3d(follower.x - offset.x, lockHeight(player, client.player) ? follower.y : basePosition(player, delta).y, follower.z - offset.z);
+            return weighted(target.subtract(actual), ArmAnimationState.right(player.getUuid(), delta));
+        }
+        if (ClientConnectionCache.hasIncoming(player.getUuid()))
+            return weighted(expectedFollowerPosition(player, delta).subtract(actual), ArmAnimationState.left(player.getUuid(), delta));
+        // A chain's head is drawn at its relayed, ping-compensated position, so observers see it without the tracker lag.
+        if (ClientConnectionCache.hasOutgoing(player.getUuid()))
+            return weighted(basePosition(player, delta).subtract(actual), ArmAnimationState.right(player.getUuid(), delta));
+        return Vec3d.ZERO;
     }
 
-    public static Vec3d followerHand(AbstractClientPlayerEntity leader, float delta, ClientConnectionCache.Link link) {
-        return contactPoint(leader, delta, link, ClientConnectionCache.visualHandGap() * .5);
+    /** A remote holding player's best-known current position: relayed and ping-compensated, else vanilla's. */
+    private static Vec3d basePosition(AbstractClientPlayerEntity player, float delta) {
+        if (player != MinecraftClient.getInstance().player) {
+            Vec3d relayed = ClientConnectionCache.displayPosition(player.getUuid());
+            if (relayed != null) return relayed;
+        }
+        return interpolatedPosition(player, delta);
     }
 
-    private static Vec3d contactPoint(AbstractClientPlayerEntity leader, float delta, ClientConnectionCache.Link link,
-                                      double gapOffset) {
-        Vec3d position = canonicalPosition(leader, delta, new HashSet<>());
-        Basis basis = basis(lerpAngle(leader.prevBodyYaw, leader.bodyYaw, delta));
-        double side = ClientConnectionCache.formationSideOffset() * .5 + gapOffset;
-        double behind = ClientConnectionCache.effectiveBehindOffset(link) * .5;
-        return position.add(basis.rightX * side - basis.forwardX * behind, HAND_HEIGHT,
-                basis.rightZ * side - basis.forwardZ * behind);
+    private static Vec3d weighted(Vec3d correction, float progress) {
+        if (correction.lengthSquared() > RELEASE_DISTANCE * RELEASE_DISTANCE || progress <= 0f) return Vec3d.ZERO;
+        return correction.multiply(progress);
     }
 
-    /** Resolves chains from their head so every observer renders the same continuous formation. */
-    private static Vec3d canonicalPosition(AbstractClientPlayerEntity player, float delta, Set<java.util.UUID> visited) {
-        if (!visited.add(player.getUuid())) return interpolatedPosition(player, delta);
+    /** Where the follower stands relative to its leader: on the right, a touch behind while walking. */
+    private static Vec3d formationOffset(ClientConnectionCache.Link link, AbstractClientPlayerEntity leader, float delta) {
+        double yaw = Math.toRadians(ClientConnectionCache.formationYaw(link, delta, leader.bodyYaw));
+        double side = ClientConnectionCache.settings().sideOffset();
+        double behind = ClientConnectionCache.behindOffset(link, delta);
+        return new Vec3d(-Math.cos(yaw) * side + Math.sin(yaw) * behind, 0, -Math.sin(yaw) * side - Math.cos(yaw) * behind);
+    }
+
+    /**
+     * On the ground each partner keeps their own height (steps, jumps); in water or the air the pair moves as one.
+     * Either partner in water is enough, so stepping in or climbing out never pulls the hands apart.
+     */
+    private static boolean lockHeight(PlayerEntity a, PlayerEntity b) {
+        return a.isTouchingWater() || b.isTouchingWater() || isFlying(a) || isFlying(b);
+    }
+
+    private static boolean isFlying(PlayerEntity player) {
+        return player == MinecraftClient.getInstance().player ? player.getAbilities().flying : ClientConnectionCache.isFlying(player.getUuid());
+    }
+
+    /** Where a player is actually drawn this frame, including any lag correction. */
+    public static Vec3d renderedPosition(AbstractClientPlayerEntity player, float delta) {
+        return interpolatedPosition(player, delta).add(renderCorrection(player, delta));
+    }
+
+    /** Beyond this gap the pair is genuinely apart (e.g. mid-teleport), so each is drawn where it really is. */
+    private static final double RELEASE_DISTANCE = 6.0;
+
+    private static Vec3d canonicalPosition(AbstractClientPlayerEntity player, float delta, Set<UUID> visited) {
+        Vec3d own = basePosition(player, delta);
+        if (!visited.add(player.getUuid())) return own;
         ClientConnectionCache.Link incoming = ClientConnectionCache.incomingLink(player.getUuid());
-        if (incoming == null || player.getWorld() == null) return interpolatedPosition(player, delta);
-        var rawLeader = player.getWorld().getPlayerByUuid(incoming.leader());
-        if (!(rawLeader instanceof AbstractClientPlayerEntity leader)) return interpolatedPosition(player, delta);
+        if (incoming == null || player.getWorld() == null) return own;
+        if (!(player.getWorld().getPlayerByUuid(incoming.leader()) instanceof AbstractClientPlayerEntity leader)) return own;
         Vec3d leaderPosition = canonicalPosition(leader, delta, visited);
-        Basis basis = basis(lerpAngle(leader.prevBodyYaw, leader.bodyYaw, delta));
-        double behind = ClientConnectionCache.effectiveBehindOffset(incoming);
-        return leaderPosition.add(
-                basis.rightX * ClientConnectionCache.formationSideOffset() - basis.forwardX * behind,
-                0,
-                basis.rightZ * ClientConnectionCache.formationSideOffset() - basis.forwardZ * behind);
+        Vec3d offset = formationOffset(incoming, leader, delta);
+        return new Vec3d(leaderPosition.x + offset.x, lockHeight(leader, player) ? leaderPosition.y : own.y, leaderPosition.z + offset.z);
     }
 
-    public static float interpolatedBodyYaw(AbstractClientPlayerEntity player, float delta) {
-        return lerpAngle(player.prevBodyYaw, player.bodyYaw, delta);
-    }
-    private static Basis basis(float yawDegrees) {
-        double yaw = Math.toRadians(yawDegrees);
-        return new Basis(-Math.sin(yaw), Math.cos(yaw), -Math.cos(yaw), -Math.sin(yaw));
-    }
     private static double lerp(double a, double b, float t) { return a + (b - a) * t; }
-    private static float lerpAngle(float a, float b, float t) {
-        float difference = (b - a) % 360f;
-        if (difference > 180f) difference -= 360f;
-        if (difference < -180f) difference += 360f;
-        return a + difference * t;
-    }
-    private record Basis(double forwardX, double forwardZ, double rightX, double rightZ) {}
     private HandHoldVisuals() {}
 }

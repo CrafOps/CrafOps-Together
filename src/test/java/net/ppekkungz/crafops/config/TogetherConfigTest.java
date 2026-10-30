@@ -12,7 +12,7 @@ class TogetherConfigTest {
         config.visualHandGap = 0;
         config.disconnectDistance = 1;
         config.validate();
-        assertEquals(5, config.configurationVersion);
+        assertEquals(TogetherConfig.CURRENT_VERSION, config.configurationVersion);
         assertEquals(64, config.maxPlayersPerChain);
         assertEquals(1, config.maxPendingRequests);
         assertEquals(2.0, config.formationSideOffset);

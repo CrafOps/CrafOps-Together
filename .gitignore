@@ -20,3 +20,7 @@ hs_err_pid*
 # Common working directory
 run
 /src - Copy
+/videos
+/run-server
+/run-client2
+/run-client3

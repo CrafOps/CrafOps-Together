@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
  * Responsibilities:
  *   1. Register server-side packet receivers (C2S)
  *   2. Hook InteractionManager into server tick loop
- *   3. Register /together commands
+ *   3. Register /crafops together commands
  *   4. Clean up all connections on server stop
  */
 
@@ -32,9 +32,11 @@ public class CrafOpsUtils implements ModInitializer {
         TogetherConfig.load();
         TogetherPackets.registerServerReceivers();
 
-        ServerTickEvents.END_SERVER_TICK.register(server ->
-                InteractionManager.getInstance().onServerTick(server)
-        );
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            InteractionManager.getInstance().onServerTick(server);
+            TogetherDebug.tick(server);
+            TogetherPackets.tick(server);
+        });
 
         TogetherCommands.register();
 

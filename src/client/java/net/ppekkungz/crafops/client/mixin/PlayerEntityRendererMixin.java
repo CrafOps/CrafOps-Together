@@ -1,5 +1,6 @@
 package net.ppekkungz.crafops.client.mixin;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.entity.PlayerEntityRenderer;
@@ -12,7 +13,11 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Makes every client render the follower from the same canonical leader-relative position. */
+/**
+ * Hides network lag between partners: remote followers are drawn at the canonical leader-relative spot
+ * (fading the correction out when it is too large to be lag, e.g. mid-teleport), and every follower's body
+ * faces the shared formation yaw so both arms line up.
+ */
 @Mixin(PlayerEntityRenderer.class)
 public abstract class PlayerEntityRendererMixin {
     @Inject(method = "render(Lnet/minecraft/client/network/AbstractClientPlayerEntity;FFLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumerProvider;I)V",
@@ -20,21 +25,14 @@ public abstract class PlayerEntityRendererMixin {
     private void crafopsTogether$alignRender(AbstractClientPlayerEntity player, float yaw, float tickDelta,
                                               MatrixStack matrices, VertexConsumerProvider vertices, int light,
                                               CallbackInfo ci) {
+        if (player.getWorld() == null) return;
         var link = ClientConnectionCache.incomingLink(player.getUuid());
-        if (link == null || player.getWorld() == null) return;
-        var rawLeader = player.getWorld().getPlayerByUuid(link.leader());
-        if (!(rawLeader instanceof AbstractClientPlayerEntity leader)) return;
-
-        float progress = ArmAnimationState.left(player.getUuid());
-        Vec3d expected = HandHoldVisuals.expectedFollowerPosition(leader, tickDelta, link);
-        Vec3d actual = HandHoldVisuals.interpolatedPosition(player, tickDelta);
-        Vec3d correction = expected.subtract(actual);
-        double horizontal = Math.sqrt(correction.x * correction.x + correction.z * correction.z);
-        double maximum = ClientConnectionCache.maxVisualPositionCorrection();
-        if (horizontal > maximum && horizontal > 0.0001) correction = correction.multiply(maximum / horizontal);
-        matrices.translate(correction.x * progress, 0, correction.z * progress);
-
-        player.prevBodyYaw = leader.prevBodyYaw;
-        player.bodyYaw = leader.bodyYaw;
+        if (link != null && player.getWorld().getPlayerByUuid(link.leader()) instanceof AbstractClientPlayerEntity leader && !player.isSwimming()) {
+            float formationYaw = ClientConnectionCache.formationYaw(link, tickDelta, leader.bodyYaw);
+            player.prevBodyYaw = formationYaw;
+            player.bodyYaw = formationYaw;
+        }
+        Vec3d correction = HandHoldVisuals.renderCorrection(player, tickDelta);
+        if (correction != Vec3d.ZERO) matrices.translate(correction.x, correction.y, correction.z);
     }
 }

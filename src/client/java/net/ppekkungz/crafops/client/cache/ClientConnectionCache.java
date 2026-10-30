@@ -1,134 +1,220 @@
 package net.ppekkungz.crafops.client.cache;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.util.math.Vec3d;
+import net.ppekkungz.crafops.interaction.PartnerState;
 import net.minecraft.client.world.ClientWorld;
+import net.ppekkungz.crafops.interaction.FollowSteering;
+import net.ppekkungz.crafops.interaction.FormationSettings;
 
 import java.util.*;
 
-/** Complete client mirror, replaced atomically whenever the server sends a snapshot. */
+/**
+ * Complete client mirror of the server's links, plus per-link motion state that every client advances
+ * identically each tick (formation yaw, walking blend, jump lift) and that renderers interpolate.
+ */
 public final class ClientConnectionCache {
     public record Link(UUID id, UUID leader, UUID follower) {}
+    private static final double TELEPORT_RESET_DISTANCE = 4.0;
+    private static final float TURN_CATCH_UP = 0.3f;
+    private static final long STALE_NANOS = 200_000_000L;
+    /** Measured in game: without this bias the follower ran ~1 tick ahead of the leader (it already moves a tick after steering). */
+    private static final double LATENCY_BIAS_TICKS = -0.5;
+    private static final int MAX_TRUSTED_PING_MILLIS = 500;
+    private static final double SNAP_DISTANCE = 3.0;
+    private static final double DISPLAY_SMOOTHING_PER_SECOND = 25.0;
+    private static final Map<UUID, Track> partnerTracks = new HashMap<>();
+    private static final Map<UUID, Display> displayed = new HashMap<>();
+    private record Track(PartnerState state, long receivedNanos) {}
+    private record Display(Vec3d position, long atNanos) {}
+
     private static Map<UUID, Link> links = Map.of();
-    private static boolean visualsEnabled = true;
-    private static double renderDistance = 64.0;
-    private static double formationSideOffset = .92;
-    private static double formationBehindOffset = 0;
-    private static double formationTolerance = .03;
-    private static double formationSpringStrength = .48;
-    private static double formationAcceleration = .24;
-    private static double formationMaxCorrectionSpeed = 1.0;
-    private static double leaderVelocityMatch = .95;
-    private static double stepAssistVelocity = .18;
-    private static double visualHandGap = .08;
-    private static double maxVisualPositionCorrection = 2.0;
-    private static double movingFormationBehindOffset = .28;
-    private static double movementDetectionSpeed = .025;
-    private static double movementBlendSpeed = .14;
-    private static double maxJumpArmLift = .55;
+    private static Map<UUID, Link> incomingByFollower = Map.of();
+    private static Map<UUID, Link> outgoingByLeader = Map.of();
+    private static FormationSettings settings = FormationSettings.DEFAULTS;
+    private static Set<UUID> flying = Set.of();
     private static final Map<UUID, MotionState> motionByLink = new HashMap<>();
 
     public static void replace(Collection<Link> snapshot) {
-        Map<UUID, Link> next = new LinkedHashMap<>();
-        for (Link link : snapshot) next.put(link.id(), link);
+        Map<UUID, Link> next = new LinkedHashMap<>(), incoming = new HashMap<>(), outgoing = new HashMap<>();
+        for (Link link : snapshot) {
+            next.put(link.id(), link);
+            incoming.put(link.follower(), link);
+            outgoing.put(link.leader(), link);
+        }
         links = Collections.unmodifiableMap(next);
+        incomingByFollower = incoming;
+        outgoingByLeader = outgoing;
         motionByLink.keySet().retainAll(next.keySet());
-        next.keySet().forEach(id -> motionByLink.computeIfAbsent(id, ignored -> new MotionState()));
     }
+
     public static Collection<Link> getLinks() { return links.values(); }
     public static boolean isConnected(UUID player) { return hasIncoming(player) || hasOutgoing(player); }
-    public static boolean isAdjacent(UUID first, UUID second) { return links.values().stream().anyMatch(l ->
-            (l.leader().equals(first) && l.follower().equals(second)) || (l.leader().equals(second) && l.follower().equals(first))); }
-    public static boolean hasIncoming(UUID player) { return links.values().stream().anyMatch(l -> l.follower().equals(player)); }
-    public static boolean hasOutgoing(UUID player) { return links.values().stream().anyMatch(l -> l.leader().equals(player)); }
-    public static UUID incomingLeader(UUID player) {
-        Link link = incomingLink(player);
-        return link == null ? null : link.leader();
+    public static boolean isAdjacent(UUID first, UUID second) {
+        Link a = incomingByFollower.get(first), b = incomingByFollower.get(second);
+        return (a != null && a.leader().equals(second)) || (b != null && b.leader().equals(first));
     }
-    public static UUID outgoingFollower(UUID player) {
-        Link link = outgoingLink(player);
-        return link == null ? null : link.follower();
-    }
-    public static Link incomingLink(UUID player) {
-        for (Link link : links.values()) if (link.follower().equals(player)) return link;
-        return null;
-    }
-    public static Link outgoingLink(UUID player) {
-        for (Link link : links.values()) if (link.leader().equals(player)) return link;
-        return null;
-    }
-    public static void setSettings(boolean enabled, double distance, double side, double behind, double tolerance,
-                                   double spring, double acceleration, double maxSpeed, double velocityMatch, double stepAssist,
-                                   double handGap, double visualCorrection, double movingBehind, double movementThreshold,
-                                   double blendSpeed, double jumpArmLift) {
-        visualsEnabled = enabled; renderDistance = distance;
-        formationSideOffset = side; formationBehindOffset = behind; formationTolerance = tolerance;
-        formationSpringStrength = spring; formationAcceleration = acceleration;
-        formationMaxCorrectionSpeed = maxSpeed; leaderVelocityMatch = velocityMatch; stepAssistVelocity = stepAssist;
-        visualHandGap = handGap; maxVisualPositionCorrection = visualCorrection;
-        movingFormationBehindOffset = movingBehind; movementDetectionSpeed = movementThreshold;
-        movementBlendSpeed = blendSpeed; maxJumpArmLift = jumpArmLift;
+    public static boolean hasIncoming(UUID player) { return incomingByFollower.containsKey(player); }
+    public static boolean hasOutgoing(UUID player) { return outgoingByLeader.containsKey(player); }
+    public static Link incomingLink(UUID player) { return incomingByFollower.get(player); }
+    public static Link outgoingLink(UUID player) { return outgoingByLeader.get(player); }
+
+    /** Latest directly-relayed state of a holding player, see {@link PartnerState}. */
+    public static void receivePartnerState(UUID player, PartnerState state) {
+        partnerTracks.put(player, new Track(state, System.nanoTime()));
     }
 
-    /** Advances visual movement/jump state once per client tick using the same movement threshold as the server. */
+    /** The relayed state if it is recent enough to trust; otherwise callers fall back to vanilla positions. */
+    public static PartnerState freshState(UUID player) {
+        Track track = partnerTracks.get(player);
+        return track == null || System.nanoTime() - track.receivedNanos > STALE_NANOS ? null : track.state;
+    }
+
+    /**
+     * Where a remote holding player is right now: their own reported position, carried forward by their
+     * velocity for the time since it arrived plus the one-way trip (half of each side's ping
+     * of server wait, minus the tick the follower spends moving). Null when no fresh state exists.
+     */
+    public static Vec3d predictedPosition(UUID player) {
+        Track track = partnerTracks.get(player);
+        if (track == null || System.nanoTime() - track.receivedNanos > STALE_NANOS) return null;
+        double ageTicks = (System.nanoTime() - track.receivedNanos) / 50_000_000.0;
+        double tripTicks = (pingMillis(player) + pingMillis(localPlayerId())) / 2.0 / 50.0 + LATENCY_BIAS_TICKS;
+        double[] p = track.state.extrapolate(ageTicks + tripTicks);
+        return new Vec3d(p[0], p[1], p[2]);
+    }
+
+    /**
+     * {@link #predictedPosition} smoothed per frame, for drawing: a new packet nudges the model instead of
+     * snapping it. Large jumps (teleports) snap straight to the new spot.
+     */
+    public static Vec3d displayPosition(UUID player) {
+        Vec3d target = predictedPosition(player);
+        if (target == null) { displayed.remove(player); return null; }
+        long now = System.nanoTime();
+        Display shown = displayed.get(player);
+        if (shown == null || shown.position.squaredDistanceTo(target) > SNAP_DISTANCE * SNAP_DISTANCE) {
+            displayed.put(player, new Display(target, now));
+            return target;
+        }
+        double seconds = (now - shown.atNanos) / 1.0e9;
+        if (seconds <= 0) return shown.position;
+        double blend = 1.0 - Math.exp(-seconds * DISPLAY_SMOOTHING_PER_SECOND);
+        Vec3d next = shown.position.lerp(target, blend);
+        displayed.put(player, new Display(next, now));
+        return next;
+    }
+
+    /** Leader velocity in blocks/tick: the relayed one when fresh, else estimated from interpolated movement. */
+    public static Vec3d leaderVelocity(Link link) {
+        PartnerState state = freshState(link.leader());
+        if (state != null) return new Vec3d(state.velocityX(), state.velocityY(), state.velocityZ());
+        return new Vec3d(leaderVelocityX(link), leaderVelocityY(link), leaderVelocityZ(link));
+    }
+
+    private static int pingMillis(UUID player) {
+        var handler = MinecraftClient.getInstance().getNetworkHandler();
+        PlayerListEntry entry = handler == null || player == null ? null : handler.getPlayerListEntry(player);
+        return entry == null ? 0 : Math.min(entry.getLatency(), MAX_TRUSTED_PING_MILLIS);
+    }
+    private static UUID localPlayerId() {
+        var player = MinecraftClient.getInstance().player;
+        return player == null ? null : player.getUuid();
+    }
+
+    /** Server-reported flight, since a client cannot see other players' abilities. */
+    public static void setFlying(Set<UUID> players) { flying = Set.copyOf(players); }
+    public static boolean isFlying(UUID player) { return flying.contains(player); }
+
+    public static void setSettings(FormationSettings next) { settings = next; }
+    public static FormationSettings settings() { return settings; }
+
+    /** Advances shared visual/motion state once per client tick. */
     public static void tickMotion(ClientWorld world) {
         for (Link link : links.values()) {
-            MotionState state = motionByLink.computeIfAbsent(link.id(), ignored -> new MotionState());
-            var rawLeader = world.getPlayerByUuid(link.leader());
-            var rawFollower = world.getPlayerByUuid(link.follower());
-            if (!(rawLeader instanceof AbstractClientPlayerEntity leader)
-                    || !(rawFollower instanceof AbstractClientPlayerEntity follower)) continue;
+            if (!(world.getPlayerByUuid(link.leader()) instanceof AbstractClientPlayerEntity leader)
+                    || !(world.getPlayerByUuid(link.follower()) instanceof AbstractClientPlayerEntity follower)) continue;
+            MotionState state = motionByLink.get(link.id());
+            double movedX = leader.getX() - leader.prevX, movedZ = leader.getZ() - leader.prevZ;
+            if (state == null || movedX * movedX + movedZ * movedZ > TELEPORT_RESET_DISTANCE * TELEPORT_RESET_DISTANCE) {
+                state = new MotionState(leader.bodyYaw);
+                motionByLink.put(link.id(), state);
+                continue;
+            }
 
-            double movedX = leader.getX() - leader.prevX;
-            double movedZ = leader.getZ() - leader.prevZ;
-            boolean moving = movedX * movedX + movedZ * movedZ >= movementDetectionSpeed * movementDetectionSpeed;
-            state.movementBlend = approach(state.movementBlend, moving ? 1.0 : 0.0, movementBlendSpeed);
+            state.prevYaw = state.yaw;
+            // Ease toward the leader's facing: a fixed floor for small corrections, faster for sharp turns.
+            PartnerState relayed = freshState(link.leader());
+            float targetYaw = relayed == null ? leader.bodyYaw : relayed.bodyYaw();
+            float gap = Math.abs(FollowSteering.wrapDegrees(targetYaw - state.yaw));
+            state.yaw = FollowSteering.approachAngle(state.yaw, targetYaw, Math.max((float) settings.yawSpeed(), gap * TURN_CATCH_UP));
 
-            double leaderJump = jumpLift(leader, follower);
-            double followerJump = jumpLift(follower, leader);
-            state.followerArmLift = approach(state.followerArmLift, leaderJump, leaderJump > state.followerArmLift ? .18 : .10);
-            state.leaderArmLift = approach(state.leaderArmLift, followerJump, followerJump > state.leaderArmLift ? .18 : .10);
+            state.velocityX = state.velocityX * 0.5 + movedX * 0.5;
+            state.velocityZ = state.velocityZ * 0.5 + movedZ * 0.5;
+            state.velocityY = state.velocityY * 0.5 + (leader.getY() - leader.prevY) * 0.5;
+            double threshold = settings.movementDetectionSpeed();
+            boolean moving = movedX * movedX + movedZ * movedZ >= threshold * threshold;
+            state.prevBlend = state.blend;
+            state.blend = approach(state.blend, moving ? 1.0 : 0.0, settings.movementBlendSpeed());
+
+            double leaderJump = jumpLift(leader, follower), followerJump = jumpLift(follower, leader);
+            state.prevFollowerLift = state.followerLift;
+            state.prevLeaderLift = state.leaderLift;
+            state.followerLift = approach(state.followerLift, leaderJump, leaderJump > state.followerLift ? .18 : .10);
+            state.leaderLift = approach(state.leaderLift, followerJump, followerJump > state.leaderLift ? .18 : .10);
         }
     }
 
-    public static double effectiveBehindOffset(Link link) {
+    /** Smoothed facing the pair walks along. Turning in place no longer whips the follower around. */
+    public static float formationYaw(Link link, float delta, float fallback) {
         MotionState state = motionByLink.get(link.id());
-        double blend = state == null ? 0.0 : state.movementBlend;
-        return formationBehindOffset + (movingFormationBehindOffset - formationBehindOffset) * blend;
+        if (state == null) return fallback;
+        return state.prevYaw + FollowSteering.wrapDegrees(state.yaw - state.prevYaw) * delta;
     }
-    public static double leaderArmLift(Link link) {
+    public static double behindOffset(Link link, float delta) {
         MotionState state = motionByLink.get(link.id());
-        return state == null ? 0.0 : state.leaderArmLift;
+        double blend = state == null ? 0.0 : smoothstep(lerp(state.prevBlend, state.blend, delta));
+        return settings.behindOffset() + (settings.movingBehindOffset() - settings.behindOffset()) * blend;
     }
-    public static double followerArmLift(Link link) {
+    public static double leaderArmLift(Link link, float delta) {
         MotionState state = motionByLink.get(link.id());
-        return state == null ? 0.0 : state.followerArmLift;
+        return state == null ? 0.0 : lerp(state.prevLeaderLift, state.leaderLift, delta);
     }
-    public static boolean visualsEnabled() { return visualsEnabled; }
-    public static double renderDistance() { return renderDistance; }
-    public static double formationSideOffset() { return formationSideOffset; }
-    public static double formationBehindOffset() { return formationBehindOffset; }
-    public static double formationTolerance() { return formationTolerance; }
-    public static double formationSpringStrength() { return formationSpringStrength; }
-    public static double formationAcceleration() { return formationAcceleration; }
-    public static double formationMaxCorrectionSpeed() { return formationMaxCorrectionSpeed; }
-    public static double leaderVelocityMatch() { return leaderVelocityMatch; }
-    public static double stepAssistVelocity() { return stepAssistVelocity; }
-    public static double visualHandGap() { return visualHandGap; }
-    public static double maxVisualPositionCorrection() { return maxVisualPositionCorrection; }
-    public static void clear() { links = Map.of(); motionByLink.clear(); }
+    public static double followerArmLift(Link link, float delta) {
+        MotionState state = motionByLink.get(link.id());
+        return state == null ? 0.0 : lerp(state.prevFollowerLift, state.followerLift, delta);
+    }
+    /** Leader velocity in blocks/tick, smoothed to hide the 3-tick interpolation steps of remote players. */
+    public static double leaderVelocityX(Link link) { MotionState s = motionByLink.get(link.id()); return s == null ? 0 : s.velocityX; }
+    public static double leaderVelocityZ(Link link) { MotionState s = motionByLink.get(link.id()); return s == null ? 0 : s.velocityZ; }
+    public static double leaderVelocityY(Link link) { MotionState s = motionByLink.get(link.id()); return s == null ? 0 : s.velocityY; }
+
+    public static void clear() {
+        links = Map.of(); incomingByFollower = Map.of(); outgoingByLeader = Map.of(); motionByLink.clear(); flying = Set.of();
+        partnerTracks.clear(); displayed.clear();
+    }
+
     private static double jumpLift(AbstractClientPlayerEntity jumper, AbstractClientPlayerEntity other) {
-        double verticalVelocity = Math.max(0.0, jumper.getVelocity().y);
+        if (jumper.isTouchingWater()) return 0.0;
+        double verticalVelocity = Math.max(0.0, jumper.getY() - jumper.prevY);
         boolean airborneJump = !jumper.isOnGround() && (jumper.getY() > other.getY() || verticalVelocity > .04);
         if (!airborneJump) return 0.0;
-        return Math.min(maxJumpArmLift, Math.max(jumper.getY() - other.getY(), verticalVelocity * 1.15));
+        return Math.min(settings.maxJumpArmLift(), Math.max(jumper.getY() - other.getY(), verticalVelocity * 1.15));
     }
     private static double approach(double value, double target, double step) {
         return value < target ? Math.min(target, value + step) : Math.max(target, value - step);
     }
+    private static double lerp(double a, double b, float t) { return a + (b - a) * t; }
+    private static double smoothstep(double t) { return t * t * (3 - 2 * t); }
+
     private static final class MotionState {
-        private double movementBlend;
-        private double leaderArmLift;
-        private double followerArmLift;
+        float prevYaw, yaw;
+        double prevBlend, blend;
+        double prevLeaderLift, leaderLift, prevFollowerLift, followerLift;
+        double velocityX, velocityY, velocityZ;
+        MotionState(float yaw) { this.prevYaw = yaw; this.yaw = yaw; }
     }
     private ClientConnectionCache() {}
 }

@@ -13,6 +13,32 @@ base {
 loom {
     splitEnvironmentSourceSets()
 
+    runs {
+        // Three local players plus a dedicated server for testing interactions between players.
+        // Each client opens at 1280x720 so all three fit on one screen (see scripts/arrange-windows.ps1).
+        server {
+            runDir "run-server"
+        }
+        client {
+            vmArgs "-Ddevauth.enabled=false"
+            programArgs "--username", "Dev", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+        }
+        client2 {
+            client()
+            vmArgs "-Ddevauth.enabled=false"
+            configName "Minecraft Client 2"
+            runDir "run-client2"
+            programArgs "--username", "Dev2", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+        }
+        client3 {
+            client()
+            vmArgs "-Ddevauth.enabled=false"
+            configName "Minecraft Client 3"
+            runDir "run-client3"
+            programArgs "--username", "Dev3", "--quickPlayMultiplayer", "localhost:25565", "--width", "1280", "--height", "720"
+        }
+    }
+
     mods {
         "crafops_together" {
             sourceSet sourceSets.main

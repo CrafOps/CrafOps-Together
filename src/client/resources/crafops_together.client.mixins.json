@@ -6,7 +6,9 @@
   "client": [
     "BipedEntityModelMixin",
     "ClientEntityCollisionMixin",
-    "PlayerEntityRendererMixin"
+    "KeyboardInputMixin",
+    "PlayerEntityRendererMixin",
+    "WindowTitleMixin"
   ],
   "injectors": {
     "defaultRequire": 1
